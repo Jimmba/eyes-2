@@ -5,14 +5,14 @@ export interface CameraHandle {
   stop(): void;
 }
 
-export async function startCamera(video: HTMLVideoElement): Promise<CameraHandle> {
+export async function startCamera(video: HTMLVideoElement, size = { w: 1920, h: 1080 }): Promise<CameraHandle> {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia недоступен');
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       facingMode: 'user',
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
+      width: { ideal: size.w },
+      height: { ideal: size.h },
       frameRate: { ideal: 30 },
     },
   });

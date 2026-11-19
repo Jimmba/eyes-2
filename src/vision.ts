@@ -12,8 +12,8 @@ export async function createLandmarker(): Promise<Landmarker> {
     FaceLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: './face_landmarker.task', delegate },
       runningMode: 'VIDEO',
-      numFaces: 3,
-      outputFaceBlendshapes: true,
+      numFaces: 2,
+      outputFaceBlendshapes: false,
       outputFacialTransformationMatrixes: true,
     });
   try {

@@ -4,6 +4,7 @@ import { state } from './config';
 import { measureEye, median, poseFromMatrix, std, type EyeRaw, type EyeSide } from './geometry';
 import { t } from './i18n';
 import { Recorder } from './recorder';
+import { saveSnapshot } from './snapshot';
 import { createLandmarker, type Landmarker } from './vision';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -14,66 +15,145 @@ const panel = $<HTMLPreElement>('panel');
 const statusEl = $('status');
 const startBtn = $<HTMLButtonElement>('start');
 const devBox = $<HTMLInputElement>('dev');
+const resSel = $<HTMLSelectElement>('res');
 const recBtn = $<HTMLButtonElement>('rec');
+const snapBtn = $<HTMLButtonElement>('snap');
+const durInput = $<HTMLInputElement>('dur');
 const labelInput = $<HTMLInputElement>('label');
 const recInfo = $('recInfo');
 const cropCanvas: Record<EyeSide, HTMLCanvasElement> = { right: $('cropR'), left: $('cropL') };
+
+const PREVIEW_W = 640; // превью и оверлей рисуем уменьшенными (быстрее), расчёты идут по полному кадру
+const CROP_EVERY = 3; // окна глаз обновляем не каждый кадр
 
 // i18n
 $('title').textContent = t.title;
 $('disclaimer').textContent = t.disclaimer;
 startBtn.textContent = t.start;
 $('devLabel').textContent = t.dev;
+$('resLabel').textContent = t.resLabel;
+$('durLabel').textContent = t.durLabel;
 recBtn.textContent = t.record;
+snapBtn.textContent = t.snapshot;
 labelInput.placeholder = t.labelPlaceholder;
 recInfo.textContent = t.recHint;
 $('capR').textContent = t.eyeR;
 $('capL').textContent = t.eyeL;
 
 const recorder = new Recorder();
-const WINDOW = 30; // кадров в окне статистики (~1 с)
+const WINDOW = 30; // кадров в окне статистики
 const hist: Record<EyeSide, { dx: number[]; dy: number[] }> = {
   right: { dx: [], dy: [] },
   left: { dx: [], dy: [] },
 };
 let fps = 0;
 let lastNow = 0;
+let frameNo = 0;
 let cam: CameraHandle | null = null;
 let engine: Landmarker | null = null;
 let stopLoop: (() => void) | null = null;
+let runningStatus = '';
+let lastPanelText = '';
+let busy = false;
+let recTimer: ReturnType<typeof setTimeout> | null = null;
+let recEnd = 0;
 
 devBox.addEventListener('change', () => {
   state.isDev = devBox.checked;
 });
 
+// --- звук и вибрация: подсказки, чтобы не смотреть на экран ---
+let audio: AudioContext | null = null;
+function beep(freq = 880, ms = 150): void {
+  try {
+    audio ??= new AudioContext();
+    const o = audio.createOscillator();
+    const gain = audio.createGain();
+    gain.gain.value = 0.2;
+    o.frequency.value = freq;
+    o.connect(gain).connect(audio.destination);
+    o.start();
+    o.stop(audio.currentTime + ms / 1000);
+  } catch {
+    /* звук недоступен */
+  }
+}
+const vibrate = (p: number | number[]) => navigator.vibrate?.(p);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function countdown(sec: number, label: string): Promise<void> {
+  for (let i = sec; i > 0; i--) {
+    statusEl.textContent = `${label} ${i}…`;
+    beep(600, 80);
+    await sleep(1000);
+  }
+  statusEl.textContent = runningStatus;
+}
+
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
+  resSel.disabled = true;
   statusEl.textContent = t.starting;
   try {
     if (!window.isSecureContext) throw new Error(t.noHttps);
-    cam = await startCamera(video);
+    audio ??= new AudioContext(); // создаём по жесту пользователя
+    const size = resSel.value === '720' ? { w: 1280, h: 720 } : { w: 1920, h: 1080 };
+    cam = await startCamera(video, size);
     engine = await createLandmarker();
-    statusEl.textContent = `${t.running}: ${cam.info}; ${engine.delegate}`;
+    runningStatus = `${t.running}: ${cam.info}; ${engine.delegate}`;
+    statusEl.textContent = runningStatus;
     recBtn.disabled = false;
+    snapBtn.disabled = false;
     stopLoop = onVideoFrame(video, processFrame);
   } catch (e) {
     console.error(e);
     statusEl.textContent = `${t.error}: ${(e as Error).message}`;
     startBtn.disabled = false;
+    resSel.disabled = false;
     stopLoop?.();
     cam?.stop();
   }
 });
 
-recBtn.addEventListener('click', () => {
+function finishRecording(): void {
+  if (!recorder.active) return;
+  if (recTimer) clearTimeout(recTimer);
+  recTimer = null;
+  beep(440, 300);
+  vibrate([120, 80, 120]);
+  recorder.stopAndDownload();
+  recBtn.textContent = t.record;
+  recInfo.textContent = t.recHint;
+}
+
+// Запись по таймеру: 3 с на то, чтобы занять позу, затем автостоп. Отводить взгляд для остановки не нужно.
+recBtn.addEventListener('click', async () => {
   if (recorder.active) {
-    recorder.stopAndDownload();
-    recBtn.textContent = t.record;
-    recInfo.textContent = t.recHint;
-  } else {
-    recorder.start();
-    recBtn.textContent = t.recordStop;
+    finishRecording();
+    return;
   }
+  if (busy) return;
+  busy = true;
+  const dur = Math.min(60, Math.max(3, Number(durInput.value) || 10));
+  await countdown(3, t.startIn);
+  recorder.start();
+  beep(1000, 200);
+  vibrate(200);
+  recBtn.textContent = t.recordStop;
+  recEnd = performance.now() + dur * 1000;
+  recTimer = setTimeout(finishRecording, dur * 1000);
+  busy = false;
+});
+
+// Снимок с задержкой: нажали, заняли позу, получили PNG с метками для проверки глазами.
+snapBtn.addEventListener('click', async () => {
+  if (busy) return;
+  busy = true;
+  await countdown(3, t.snapIn);
+  beep(1000, 200);
+  vibrate(200);
+  saveSnapshot(view, cropCanvas.right, cropCanvas.left, lastPanelText || `${labelInput.value}`);
+  busy = false;
 });
 
 function pickFace(res: FaceLandmarkerResult): number {
@@ -103,11 +183,9 @@ function push(side: EyeSide, e: EyeRaw): void {
 function drawCrop(side: EyeSide, e: EyeRaw): void {
   const c = cropCanvas[side];
   const g = c.getContext('2d')!;
-  const cx = e.irisCenterPx.x;
-  const cy = e.irisCenterPx.y;
   const sw = e.eyeWidthPx * 2.2;
   const sh = sw / 2;
-  g.drawImage(video, cx - sw / 2, cy - sh / 2, sw, sh, 0, 0, c.width, c.height);
+  g.drawImage(video, e.irisCenterPx.x - sw / 2, e.irisCenterPx.y - sh / 2, sw, sh, 0, 0, c.width, c.height);
   const k = c.width / sw;
   g.strokeStyle = side === 'right' ? '#ff5252' : '#69f0ae';
   g.lineWidth = 2;
@@ -137,25 +215,30 @@ function processFrame(now: number): void {
   if (!engine) return;
   if (lastNow) fps = fps ? fps * 0.9 + (1000 / (now - lastNow)) * 0.1 : 1000 / (now - lastNow);
   lastNow = now;
+  frameNo++;
 
   const w = video.videoWidth;
   const h = video.videoHeight;
   if (!w || !h) return;
-  if (view.width !== w || view.height !== h) {
-    view.width = w;
-    view.height = h;
+  const pw = PREVIEW_W;
+  const ph = Math.round((PREVIEW_W * h) / w);
+  if (view.width !== pw || view.height !== ph) {
+    view.width = pw;
+    view.height = ph;
   }
-  ctx.drawImage(video, 0, 0, w, h);
+  const s = pw / w;
+  ctx.drawImage(video, 0, 0, pw, ph);
 
   const res = engine.lm.detectForVideo(video, now);
   const i = pickFace(res);
   if (i < 0) {
-    panel.textContent = `${t.noFace}\nfps ${fps.toFixed(1)}`;
+    lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
+    panel.textContent = lastPanelText;
     recorder.push(labelInput.value, [0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN]);
     return;
   }
   const lm = res.faceLandmarks[i];
-  const R = measureEye(lm, w, h, 'right');
+  const R = measureEye(lm, w, h, 'right'); // пиксели полного кадра
   const L = measureEye(lm, w, h, 'left');
   push('right', R);
   push('left', L);
@@ -170,33 +253,38 @@ function processFrame(now: number): void {
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: '#ff5252', lineWidth: 2 });
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: '#69f0ae', lineWidth: 2 });
     for (const [e, col] of [[R, '#ff5252'], [L, '#69f0ae']] as const) {
+      const cx = e.irisCenterPx.x * s;
+      const cy = e.irisCenterPx.y * s;
       ctx.strokeStyle = col;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(e.irisCenterPx.x - 8, e.irisCenterPx.y);
-      ctx.lineTo(e.irisCenterPx.x + 8, e.irisCenterPx.y);
-      ctx.moveTo(e.irisCenterPx.x, e.irisCenterPx.y - 8);
-      ctx.lineTo(e.irisCenterPx.x, e.irisCenterPx.y + 8);
+      ctx.moveTo(cx - 8, cy);
+      ctx.lineTo(cx + 8, cy);
+      ctx.moveTo(cx, cy - 8);
+      ctx.lineTo(cx, cy + 8);
       ctx.stroke();
     }
-    drawCrop('right', R);
-    drawCrop('left', L);
+    if (frameNo % CROP_EVERY === 0) {
+      drawCrop('right', R);
+      drawCrop('left', L);
+    }
 
-    const blink = res.faceBlendshapes?.[i]?.categories ?? [];
-    const bl = (n: string) => blink.find((c) => c.categoryName === n)?.score ?? NaN;
-    const vergence = R.dx - L.dx; // обе величины «к носу > 0»
-    panel.textContent = [
-      `лиц: ${res.faceLandmarks.length}  fps ${fps.toFixed(1)}  кадр ${w}×${h}`,
+    // dx обоих глаз «к носу > 0»: сумма = вергенция (сведение/разведение), разность = версия (общий поворот взгляда)
+    const vergence = R.dx + L.dx;
+    const version = R.dx - L.dx;
+    lastPanelText = [
+      `лиц: ${res.faceLandmarks.length}  fps ${fps.toFixed(1)}  кадр ${w}×${h}${labelInput.value ? '  [' + labelInput.value + ']' : ''}`,
       eyeLines('ПРАВЫЙ (R)', 'right', R),
       eyeLines('ЛЕВЫЙ  (L)', 'left', L),
-      `R.dx − L.dx = ${f(vergence)} (диам. радужки)`,
+      `вергенция R+L = ${f(vergence)}   версия R−L = ${f(version)} (диам. радужки)`,
       pose
         ? `поза: yaw ${f(pose.yaw, 1)} pitch ${f(pose.pitch, 1)} roll ${f(pose.roll, 1)}  tz ${f(pose.tz, 1)}`
         : 'поза: нет матрицы',
-      `моргание (blendshape): Left ${f(bl('eyeBlinkLeft'), 2)} Right ${f(bl('eyeBlinkRight'), 2)}`,
     ].join('\n');
+    panel.textContent = lastPanelText;
   } else {
-    panel.textContent = `fps ${fps.toFixed(1)}`;
+    lastPanelText = `fps ${fps.toFixed(1)}`;
+    panel.textContent = lastPanelText;
   }
 
   if (recorder.active) {
@@ -206,6 +294,6 @@ function processFrame(now: number): void {
       L.dx, L.dy, L.openness, L.irisDiamPx,
       pose?.yaw ?? NaN, pose?.pitch ?? NaN, pose?.roll ?? NaN, pose?.tz ?? NaN,
     ]);
-    recInfo.textContent = `${t.recording}: ${recorder.count}`;
+    recInfo.textContent = `${t.recording}: ${recorder.count}, ${t.remaining} ${Math.max(0, Math.ceil((recEnd - performance.now()) / 1000))}`;
   }
 }

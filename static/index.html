@@ -19,6 +19,7 @@
     button { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:10px 14px; font-size:1rem; }
     button.primary { background:var(--acc); color:#001a1d; border-color:var(--acc); font-weight:600; }
     button:disabled { opacity:.5; }
+    input[type=number], select { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:9px 10px; font-size:1rem; }
     input[type=text] { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:9px 10px; font-size:1rem; width:14em; }
     label { display:inline-flex; gap:6px; align-items:center; }
     pre { margin:0; padding:10px; background:#171c21; border-radius:8px; font:13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-x:auto; }
@@ -43,6 +44,8 @@
     </div>
     <div class="controls" style="margin-top:8px">
       <button id="start" class="primary"></button>
+      <label><span id="resLabel"></span>
+        <select id="res"><option value="1080">1920×1080</option><option value="720">1280×720</option></select></label>
       <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
       <span id="status"></span>
     </div>
@@ -58,7 +61,9 @@
 
   <section class="wide controls">
     <input type="text" id="label" autocomplete="off">
+    <label><span id="durLabel"></span> <input type="number" id="dur" value="10" min="3" max="60" style="width:4em"></label>
     <button id="rec" disabled></button>
+    <button id="snap" disabled></button>
     <span class="note" id="recInfo"></span>
   </section>
 </main>
