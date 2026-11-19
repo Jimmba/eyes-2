@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Косоглазие: M0 прототип</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101418; --fg:#e8eaed; --muted:#9aa0a6; --acc:#4dd0e1; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
+    main { max-width: 1100px; margin: 0 auto; padding: 12px; display:grid; gap:12px; }
+    @media (min-width: 900px) { main { grid-template-columns: 1.3fr 1fr; } header, .wide { grid-column: 1 / -1; } }
+    h1 { font-size: 1.1rem; margin: 0 0 4px; }
+    .note { color: var(--muted); font-size: .85rem; }
+    .stage { position: relative; background:#000; border-radius:8px; overflow:hidden; }
+    #view { width:100%; height:auto; display:block; transform: scaleX(-1); } /* зеркалим только превью */
+    #video { display:none; }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    button { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:10px 14px; font-size:1rem; }
+    button.primary { background:var(--acc); color:#001a1d; border-color:var(--acc); font-weight:600; }
+    button:disabled { opacity:.5; }
+    input[type=text] { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:9px 10px; font-size:1rem; width:14em; }
+    label { display:inline-flex; gap:6px; align-items:center; }
+    pre { margin:0; padding:10px; background:#171c21; border-radius:8px; font:13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-x:auto; }
+    .crops { display:flex; gap:8px; flex-wrap:wrap; }
+    .crops figure { margin:0; }
+    .crops canvas { width:240px; height:120px; background:#000; border-radius:6px; display:block; }
+    .crops figcaption { font-size:.75rem; color:var(--muted); }
+    #status { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title"></h1>
+    <div class="note" id="disclaimer"></div>
+  </header>
+
+  <section>
+    <div class="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="view"></canvas>
+    </div>
+    <div class="controls" style="margin-top:8px">
+      <button id="start" class="primary"></button>
+      <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
+      <span id="status"></span>
+    </div>
+  </section>
+
+  <section style="display:grid; gap:8px; align-content:start">
+    <pre id="panel"></pre>
+    <div class="crops" id="crops">
+      <figure><canvas id="cropR" width="480" height="240"></canvas><figcaption id="capR"></figcaption></figure>
+      <figure><canvas id="cropL" width="480" height="240"></canvas><figcaption id="capL"></figcaption></figure>
+    </div>
+  </section>
+
+  <section class="wide controls">
+    <input type="text" id="label" autocomplete="off">
+    <button id="rec" disabled></button>
+    <span class="note" id="recInfo"></span>
+  </section>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
