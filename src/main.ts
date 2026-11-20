@@ -6,6 +6,11 @@ import { t } from './i18n';
 import { Recorder } from './recorder';
 import { saveSnapshot } from './snapshot';
 import { createLandmarker, type Landmarker } from './vision';
+import { CONVENTIONS, FaceModelBuilder, RIGID_IDX, conventionById, fitScale, toMm, type FaceModel } from './core/faceModel';
+import { TimeWindow, windowStat } from './core/filters';
+import { angleDeg, binocular, deviationDeg, eyeOffsetMm, interEyeMm, prismDiopters } from './core/gaze';
+import { mpMatrixToR } from './core/linalg';
+import { CARD_HEIGHT_MM, CARD_WIDTH_MM, cardScale, defaultScale, distanceMm, focalFromVerticalFov, isPlausibleIris, manualScale, type ScaleSetup } from './core/scale';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const video = $<HTMLVideoElement>('video');
@@ -22,6 +27,15 @@ const durInput = $<HTMLInputElement>('dur');
 const labelInput = $<HTMLInputElement>('label');
 const recInfo = $('recInfo');
 const cropCanvas: Record<EyeSide, HTMLCanvasElement> = { right: $('cropR'), left: $('cropL') };
+const scaleSel = $<HTMLSelectElement>('scaleMethod');
+const irisInput = $<HTMLInputElement>('irisMm');
+const cardInput = $<HTMLInputElement>('cardPx');
+const cardBtn = $<HTMLButtonElement>('cardMeasure');
+const fovInput = $<HTMLInputElement>('fov');
+const buildBtn = $<HTMLButtonElement>('buildModel');
+const zeroBtn = $<HTMLButtonElement>('setZero');
+const resetZeroBtn = $<HTMLButtonElement>('resetZero');
+const m1Info = $('m1Info');
 
 const PREVIEW_W = 640; // превью и оверлей рисуем уменьшенными (быстрее), расчёты идут по полному кадру
 const CROP_EVERY = 3; // окна глаз обновляем не каждый кадр
@@ -39,6 +53,18 @@ labelInput.placeholder = t.labelPlaceholder;
 recInfo.textContent = t.recHint;
 $('capR').textContent = t.eyeR;
 $('capL').textContent = t.eyeL;
+$('m1Title').textContent = t.m1Title;
+$('scaleLabel').textContent = t.scaleLabel;
+$('irisMmLabel').textContent = t.irisMmLabel;
+$('cardLabel').textContent = t.cardLabel;
+$('fovLabel').textContent = t.fovLabel;
+(scaleSel.options[0] as HTMLOptionElement).text = t.scaleDefault;
+(scaleSel.options[1] as HTMLOptionElement).text = t.scaleManual;
+(scaleSel.options[2] as HTMLOptionElement).text = t.scaleCard;
+cardBtn.textContent = t.cardMeasure;
+buildBtn.textContent = t.buildModel;
+zeroBtn.textContent = t.setZero;
+resetZeroBtn.textContent = t.resetZero;
 
 const recorder = new Recorder();
 const WINDOW = 30; // кадров в окне статистики
@@ -104,6 +130,10 @@ startBtn.addEventListener('click', async () => {
     statusEl.textContent = runningStatus;
     recBtn.disabled = false;
     snapBtn.disabled = false;
+    cardBtn.disabled = false;
+    buildBtn.disabled = false;
+    zeroBtn.disabled = false;
+    resetZeroBtn.disabled = false;
     stopLoop = onVideoFrame(video, processFrame);
   } catch (e) {
     console.error(e);
@@ -155,6 +185,154 @@ snapBtn.addEventListener('click', async () => {
   saveSnapshot(view, cropCanvas.right, cropCanvas.left, lastPanelText || `${labelInput.value}`);
   busy = false;
 });
+
+
+// ---------------- M1: масштаб, модель лица, углы, личный ноль ----------------
+interface Sample { t: number; angR: number; angL: number; open: number; z: number; ipd: number; irisPx: number }
+const win = new TimeWindow<Sample>(1500);
+const builder = new FaceModelBuilder();
+let scaleSetup: ScaleSetup = defaultScale();
+let model: FaceModel | null = null;
+let building = false;
+let zero: { R: number; L: number; z: number } | null = null;
+let lastStats: { R: number; L: number; z: number; ok: boolean } = { R: NaN, L: NaN, z: NaN, ok: false };
+const M1_EMPTY: (number | string)[] = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN];
+const fovDeg = () => Math.min(100, Math.max(40, Number(fovInput.value) || 63));
+const scaleLabelText = () =>
+  `${scaleSetup.irisMm.toFixed(2)} мм (${scaleSetup.method === 'default' ? 'по умолчанию' : scaleSetup.method === 'manual' ? 'ввод' : 'карта'})`;
+const showInfo = (msg = '') => {
+  m1Info.textContent = msg;
+};
+
+scaleSel.addEventListener('change', () => {
+  if (scaleSel.value === 'default') {
+    scaleSetup = defaultScale();
+    showInfo();
+  } else if (scaleSel.value === 'manual') applyManual();
+  else showInfo(t.cardHint);
+});
+irisInput.addEventListener('change', () => {
+  if (scaleSel.value === 'manual') applyManual();
+});
+function applyManual(): void {
+  try {
+    scaleSetup = manualScale(Number(irisInput.value));
+    showInfo();
+  } catch (e) {
+    showInfo((e as Error).message);
+  }
+}
+
+cardBtn.addEventListener('click', () => {
+  const px = win.items.map((x) => x.irisPx).filter(Number.isFinite);
+  if (px.length < 8) return showInfo(t.cardFail);
+  const sorted = [...px].sort((a, b) => a - b);
+  const irisPx = sorted[sorted.length >> 1];
+  const setup = cardScale(irisPx, Number(cardInput.value));
+  if (!isPlausibleIris(setup.irisMm)) return showInfo(`${t.cardBad} (${setup.irisMm.toFixed(1)} мм)`);
+  scaleSetup = setup;
+  irisInput.value = setup.irisMm.toFixed(2);
+  showInfo(`${t.cardOk}: ${setup.irisMm.toFixed(2)} мм`);
+});
+
+buildBtn.addEventListener('click', async () => {
+  if (busy || !engine) return;
+  busy = true;
+  builder.reset();
+  model = null;
+  await countdown(3, t.startIn);
+  building = true;
+  beep(1000, 200);
+  for (let k = 8; k > 0; k--) {
+    statusEl.textContent = `${t.modelBuilding} ${k}…`;
+    await sleep(1000);
+  }
+  building = false;
+  beep(440, 300);
+  statusEl.textContent = runningStatus;
+  const m = builder.build();
+  if (!m) showInfo(t.modelFail);
+  else {
+    model = m;
+    showInfo(m.poseVariationOk ? '' : t.modelWarn);
+  }
+  busy = false;
+});
+
+zeroBtn.addEventListener('click', () => {
+  if (!lastStats.ok) return showInfo(t.zeroFail);
+  zero = { R: lastStats.R, L: lastStats.L, z: lastStats.z };
+  showInfo(`${t.zeroOk}: R ${lastStats.R.toFixed(1)}°, L ${lastStats.L.toFixed(1)}°, ${lastStats.z.toFixed(0)} мм`);
+});
+resetZeroBtn.addEventListener('click', () => {
+  zero = null;
+  showInfo();
+});
+
+const sg = (x: number, d = 1) => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + x.toFixed(d) : 'n/a');
+
+function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: number, res: FaceLandmarkerResult, i: number, R: EyeRaw, L: EyeRaw, now: number): { lines: string[]; csv: (number | string)[]; s: number } {
+  const irisPx = (R.irisDiamPx + L.irisDiamPx) / 2;
+  const sIris = scaleSetup.irisMm / irisPx;
+  const f = focalFromVerticalFov(h, fovDeg());
+  const mat = res.facialTransformationMatrixes?.[i];
+  const Rraw = mat ? mpMatrixToR(mat.data) : null;
+  const conv = conventionById(model?.convention ?? CONVENTIONS[0].id);
+  const Rimg = Rraw ? conv.apply(Rraw) : null;
+  if (building && Rraw) builder.add(toMm(lm, RIGID_IDX, w, h, sIris, f), Rraw);
+
+  let s = sIris;
+  let sModel = NaN;
+  let resid = NaN;
+  if (model && Rimg) {
+    const pts = RIGID_IDX.map((k) => ({ x: lm[k].x * w, y: lm[k].y * h }));
+    const fit = fitScale(model.points, Rimg, pts, { f, cx: w / 2, cy: h / 2 });
+    sModel = fit.mmPerPx;
+    resid = fit.residualPx;
+    s = sModel;
+  }
+  const z = distanceMm(f, s);
+  const angR = angleDeg(eyeOffsetMm(lm, w, h, 'right', s, Rimg, f).dxMm);
+  const angL = angleDeg(eyeOffsetMm(lm, w, h, 'left', s, Rimg, f).dxMm);
+  const ipd = interEyeMm(lm, w, h, s, f);
+  win.push({ t: now, angR, angL, open: Math.min(R.openness, L.openness), z, ipd, irisPx });
+
+  const it = win.items;
+  const open = it.map((x) => x.open);
+  const stR = windowStat(it.map((x) => x.angR), open);
+  const stL = windowStat(it.map((x) => x.angL), open);
+  const stZ = windowStat(it.map((x) => x.z), open);
+  const stI = windowStat(it.map((x) => x.ipd), open);
+  const ok = stR.ok && stL.ok && stZ.ok;
+  lastStats = { R: stR.median, L: stL.median, z: stZ.median, ok };
+
+  let devR = NaN, devL = NaN, verg = NaN, vers = NaN;
+  if (zero && ok) {
+    devR = deviationDeg(stR.median, zero.R, stZ.median, zero.z, stI.median);
+    devL = deviationDeg(stL.median, zero.L, stZ.median, zero.z, stI.median);
+    ({ vergenceDeg: verg, versionDeg: vers } = binocular(devR, devL));
+  }
+
+  const lines = [
+    `── M1 ── радужка ${scaleLabelText()}, FOV ${fovDeg()}°, режим ${Rimg ? '3D (поза)' : '2D (нет матрицы)'}`,
+    `мм/px: радужка ${sIris.toFixed(4)}${model ? `, модель ${sModel.toFixed(4)} (невязка ${resid.toFixed(1)} px)` : ''}  → Z ${z.toFixed(0)} мм`,
+    model
+      ? `модель лица: конв. ${model.convention}, разброс ${model.spreadMm.toFixed(2)} мм, кадров ${model.frames}, yaw ${model.yawRangeDeg.toFixed(0)}° pitch ${model.pitchRangeDeg.toFixed(0)}°${model.poseVariationOk ? '' : ' (мало поворотов!)'}`
+      : building
+        ? `модель лица: собираю кадры ${builder.count}…`
+        : 'модель лица: не построена (углы считаются по масштабу радужки, конвенция по умолчанию)',
+    `угол к носу (медиана 1,5 с, ${stR.n}/${stR.total} кадров${ok ? '' : ', НЕВАЛИДНО'}): R ${sg(stR.median)}° (${sg(prismDiopters(stR.median))} ПД) ±${sg(stR.std, 2).replace('+', '')}  L ${sg(stL.median)}° (${sg(prismDiopters(stL.median))} ПД) ±${sg(stL.std, 2).replace('+', '')}`,
+    zero
+      ? `ноль: R ${sg(zero.R)}° L ${sg(zero.L)}° на ${zero.z.toFixed(0)} мм`
+      : 'ноль: не задан (смотрите двумя глазами в камеру и нажмите «Задать ноль»)',
+    zero
+      ? `ОТКЛОНЕНИЕ: R ${sg(devR)}° L ${sg(devL)}° | вергенция ${sg(verg)}° (${sg(prismDiopters(verg))} ПД; + к носу, − к виску) версия ${sg(vers)}°`
+      : '',
+  ].filter(Boolean);
+
+  const csv: (number | string)[] = [s, z, angR, angL, devR, devL, verg, scaleSetup.method, scaleSetup.irisMm];
+  return { lines, csv, s };
+}
 
 function pickFace(res: FaceLandmarkerResult): number {
   let best = -1;
@@ -234,7 +412,7 @@ function processFrame(now: number): void {
   if (i < 0) {
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
-    recorder.push(labelInput.value, [0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN]);
+    recorder.push(labelInput.value, [0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, ...M1_EMPTY]);
     return;
   }
   const lm = res.faceLandmarks[i];
@@ -242,6 +420,7 @@ function processFrame(now: number): void {
   const L = measureEye(lm, w, h, 'left');
   push('right', R);
   push('left', L);
+  const m1 = computeM1(lm, w, h, res, i, R, L, now);
 
   const pose = res.facialTransformationMatrixes?.[i]
     ? poseFromMatrix(res.facialTransformationMatrixes[i].data)
@@ -249,6 +428,16 @@ function processFrame(now: number): void {
 
   if (state.isDev) {
     const du = new DrawingUtils(ctx);
+    if (scaleSel.value === 'card') {
+      const cw = Number(cardInput.value) * s;
+      const ch = (cw * CARD_HEIGHT_MM) / CARD_WIDTH_MM;
+      ctx.save();
+      ctx.strokeStyle = '#ffd54f';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeRect((pw - cw) / 2, (ph - ch) / 2, cw, ch);
+      ctx.restore();
+    }
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_CONTOURS, { color: '#4dd0e1', lineWidth: 1 });
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: '#ff5252', lineWidth: 2 });
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: '#69f0ae', lineWidth: 2 });
@@ -280,6 +469,7 @@ function processFrame(now: number): void {
       pose
         ? `поза: yaw ${f(pose.yaw, 1)} pitch ${f(pose.pitch, 1)} roll ${f(pose.roll, 1)}  tz ${f(pose.tz, 1)}`
         : 'поза: нет матрицы',
+      ...m1.lines,
     ].join('\n');
     panel.textContent = lastPanelText;
   } else {
@@ -293,6 +483,7 @@ function processFrame(now: number): void {
       R.dx, R.dy, R.openness, R.irisDiamPx,
       L.dx, L.dy, L.openness, L.irisDiamPx,
       pose?.yaw ?? NaN, pose?.pitch ?? NaN, pose?.roll ?? NaN, pose?.tz ?? NaN,
+      ...m1.csv,
     ]);
     recInfo.textContent = `${t.recording}: ${recorder.count}, ${t.remaining} ${Math.max(0, Math.ceil((recEnd - performance.now()) / 1000))}`;
   }

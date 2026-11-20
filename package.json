@@ -2,18 +2,20 @@
   "name": "strabismus-trainer",
   "version": "0.0.1",
   "private": true,
-  "description": "M0: камера → точки лица → числа радужек (прототип)",
+  "description": "M1: масштаб, модель лица, поза, углы (поверх прототипа M0)",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "serve": "node scripts/serve.mjs"
+    "serve": "node scripts/serve.mjs",
+    "test": "node scripts/test.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.21"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
   }
 }
