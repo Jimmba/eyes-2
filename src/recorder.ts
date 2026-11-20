@@ -1,6 +1,7 @@
-// Запись сырых чисел в CSV (без изображений) для проверки M0 на людях и на отклонённом глазе.
+// Журнал CSV (только числа, без изображений). Один журнал на запуск калибровки: при её старте очищается.
+// Сцена ставится автоматически окном (iris_card, face_model, zero) или разработчиком (dev:метка).
 export const CSV_HEADER = [
-  't_ms', 'label', 'faces', 'fps',
+  't_ms', 'scene', 'faces', 'fps',
   'R_dx', 'R_dy', 'R_open', 'R_iris_px',
   'L_dx', 'L_dy', 'L_open', 'L_iris_px',
   'yaw', 'pitch', 'roll', 'tz',
@@ -8,34 +9,34 @@ export const CSV_HEADER = [
 ].join(',');
 
 export class Recorder {
-  private rows: string[] = [];
-  private t0 = 0;
-  active = false;
+  private rows: string[] = [CSV_HEADER];
+  private t0 = performance.now();
+  /** null: не пишем */
+  scene: string | null = null;
 
-  start(): void {
+  clear(): void {
     this.rows = [CSV_HEADER];
     this.t0 = performance.now();
-    this.active = true;
+    this.scene = null;
   }
 
-  push(label: string, values: (number | string)[]): void {
-    if (!this.active) return;
+  push(values: (number | string)[]): void {
+    if (!this.scene) return;
     const t = Math.round(performance.now() - this.t0);
-    const safe = label.replace(/[",\n\r]/g, ' ');
-    const nums = values.map((v) => (typeof v === 'number' ? (Number.isFinite(v) ? v.toFixed(4) : '') : v));
-    this.rows.push([t, `"${safe}"`, ...nums].join(','));
+    const safe = this.scene.replace(/[",\n\r]/g, ' ');
+    const cells = values.map((v) => (typeof v === 'number' ? (Number.isFinite(v) ? v.toFixed(4) : '') : v));
+    this.rows.push([t, `"${safe}"`, ...cells].join(','));
   }
 
   get count(): number {
     return Math.max(0, this.rows.length - 1);
   }
 
-  stopAndDownload(): void {
-    this.active = false;
+  download(prefix = 'log'): void {
     const blob = new Blob([this.rows.join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `m0-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+    a.download = `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }

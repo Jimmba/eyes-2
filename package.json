@@ -2,7 +2,7 @@
   "name": "strabismus-trainer",
   "version": "0.0.1",
   "private": true,
-  "description": "M1: масштаб, модель лица, поза, углы (поверх прототипа M0)",
+  "description": "M1.5: пошаговая калибровка (радужка, модель лица, ноль) поверх M0 и M1",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

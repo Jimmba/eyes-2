@@ -3,88 +3,116 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Косоглазие: M0 прототип</title>
+  <title>Косоглазие: M1.5</title>
   <style>
-    :root { color-scheme: dark; --bg:#101418; --fg:#e8eaed; --muted:#9aa0a6; --acc:#4dd0e1; }
+    :root { color-scheme: dark; --bg:#101418; --fg:#e8eaed; --muted:#9aa0a6; --acc:#4dd0e1; --panel:#171c21; --line:#2a333c; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
-    main { max-width: 1100px; margin: 0 auto; padding: 12px; display:grid; gap:12px; }
-    @media (min-width: 900px) { main { grid-template-columns: 1.3fr 1fr; } header, .wide { grid-column: 1 / -1; } }
-    h1 { font-size: 1.1rem; margin: 0 0 4px; }
-    .note { color: var(--muted); font-size: .85rem; }
-    .stage { position: relative; background:#000; border-radius:8px; overflow:hidden; }
-    #view { width:100%; height:auto; display:block; transform: scaleX(-1); } /* зеркалим только превью */
-    #video { display:none; }
-    .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    #frame { position:fixed; inset:0; pointer-events:none; z-index:2000; }
+    #frame.red { box-shadow: inset 0 0 0 4px #ff3b30; }
+    #frame.green { box-shadow: inset 0 0 0 4px #34c759; }
+    header.top { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:50; }
+    .brand { flex:1; min-width:0; }
+    .brand strong { display:block; font-size:1rem; }
+    #chips { display:block; color:var(--muted); font-size:.8rem; }
     button { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:10px 14px; font-size:1rem; }
     button.primary { background:var(--acc); color:#001a1d; border-color:var(--acc); font-weight:600; }
     button:disabled { opacity:.5; }
-    input[type=number], select { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:9px 10px; font-size:1rem; }
-    input[type=text] { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:9px 10px; font-size:1rem; width:14em; }
-    label { display:inline-flex; gap:6px; align-items:center; }
-    pre { margin:0; padding:10px; background:#171c21; border-radius:8px; font:13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-x:auto; }
-    .crops { display:flex; gap:8px; flex-wrap:wrap; }
+    #menuBtn { font-size:1.3rem; line-height:1; padding:8px 12px; }
+    nav#menu { position:fixed; top:52px; right:8px; width:min(92vw, 360px); max-height:80vh; overflow:auto; background:var(--panel); border:1px solid #394552; border-radius:10px; padding:8px; z-index:60; display:grid; gap:6px; }
+    nav#menu[hidden] { display:none; }
+    nav#menu > button { text-align:left; }
+    details { border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+    details summary { cursor:pointer; color:var(--muted); }
+    details .dev { display:grid; gap:8px; margin-top:8px; }
+    label { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    input[type=number], input[type=text], select { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:8px 10px; font-size:1rem; max-width:100%; }
+    main { max-width: 1000px; margin:0 auto; padding:8px 12px 24px; display:grid; gap:10px; }
+    .stage { position:relative; background:#000; border-radius:8px; overflow:hidden; text-align:center; }
+    #view { max-width:100%; max-height:58vh; width:auto; height:auto; display:block; margin:0 auto; transform: scaleX(-1); } /* зеркалим только превью */
+    #view.marking { transform:none; touch-action:none; cursor:crosshair; }
+    #video { display:none; }
+    #timer { position:absolute; top:8px; left:50%; transform:translateX(-50%); font-size:2.6rem; font-weight:700; padding:2px 18px; border-radius:12px; background:rgba(0,0,0,.55); z-index:5; }
+    #timer[hidden] { display:none; }
+    #timer.prep { color:#ffd54f; }
+    #timer.rec { color:#ff6b61; font-size:1.8rem; }
+    #start { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+    #start[hidden] { display:none; }
+    #status { color:var(--muted); font-size:.85rem; min-height:1.2em; }
+    .note { color: var(--muted); font-size: .85rem; }
+    pre { margin:0; padding:10px; background:var(--panel); border-radius:8px; font:13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-x:auto; }
+    #devPanel[hidden] { display:none; }
+    .crops { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
     .crops figure { margin:0; }
     .crops canvas { width:240px; height:120px; background:#000; border-radius:6px; display:block; }
     .crops figcaption { font-size:.75rem; color:var(--muted); }
-    #status { color: var(--muted); }
+    aside#sheet { position:fixed; left:0; right:0; bottom:0; max-height:44vh; overflow:auto; background:var(--panel); border-top:2px solid #394552; border-radius:14px 14px 0 0; z-index:40; padding:0 14px 14px; }
+    aside#sheet[hidden] { display:none; }
+    .sheetHead { position:sticky; top:0; background:var(--panel); display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 0 6px; }
+    #sheetTitle { font-weight:700; }
+    #sheetClose { padding:4px 10px; }
+    #sheetBody p { margin:.4em 0; }
+    #sheetBody p.why { color:#b9c4cf; font-size:.92rem; }
+    #sheetBody p.big { font-size:1.15rem; font-weight:600; }
+    #sheetBody p.warn { color:#ffb74d; }
+    .btnrow { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1 id="title"></h1>
-    <div class="note" id="disclaimer"></div>
-  </header>
+<div id="frame"></div>
 
-  <section>
-    <div class="stage">
-      <video id="video" playsinline muted></video>
-      <canvas id="view"></canvas>
-    </div>
-    <div class="controls" style="margin-top:8px">
-      <button id="start" class="primary"></button>
+<header class="top">
+  <div class="brand"><strong id="title"></strong><span id="chips"></span></div>
+  <button id="menuBtn" aria-label="Меню">☰</button>
+</header>
+
+<nav id="menu" hidden>
+  <button id="miCalib"></button>
+  <button id="miCsv"></button>
+  <button id="miReset"></button>
+  <details>
+    <summary id="devSummary"></summary>
+    <div class="dev">
+      <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
       <label><span id="resLabel"></span>
         <select id="res"><option value="1080">1920×1080</option><option value="720">1280×720</option></select></label>
-      <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
-      <span id="status"></span>
+      <label><span id="fovLabel"></span> <input type="number" id="fov" value="63" min="40" max="100" step="1" style="width:4.5em"></label>
+      <input type="text" id="label" autocomplete="off">
+      <label><span id="durLabel"></span> <input type="number" id="dur" value="10" min="3" max="60" style="width:4em"></label>
+      <button id="rec"></button>
+      <button id="snap"></button>
+      <span class="note" id="recInfo"></span>
     </div>
+  </details>
+</nav>
+
+<main>
+  <section>
+    <div class="stage" id="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="view"></canvas>
+      <div id="timer" hidden></div>
+      <button id="start" class="primary"></button>
+    </div>
+    <div id="status"></div>
   </section>
 
-  <section style="display:grid; gap:8px; align-content:start">
+  <section id="devPanel">
     <pre id="panel"></pre>
-    <div class="crops" id="crops">
+    <div class="crops">
       <figure><canvas id="cropR" width="480" height="240"></canvas><figcaption id="capR"></figcaption></figure>
       <figure><canvas id="cropL" width="480" height="240"></canvas><figcaption id="capL"></figcaption></figure>
     </div>
   </section>
 
-  <section class="wide" style="display:grid; gap:8px">
-    <h2 id="m1Title" style="font-size:1rem; margin:0"></h2>
-    <div class="controls">
-      <label><span id="scaleLabel"></span>
-        <select id="scaleMethod"><option value="default"></option><option value="manual"></option><option value="card"></option></select></label>
-      <label><input type="number" id="irisMm" value="11.7" min="9" max="14" step="0.1" style="width:5em"><span id="irisMmLabel"></span></label>
-      <label><span id="cardLabel"></span> <input type="number" id="cardPx" value="400" min="100" max="1500" step="5" style="width:6em"></label>
-      <button id="cardMeasure" disabled></button>
-    </div>
-    <div class="controls">
-      <label><span id="fovLabel"></span> <input type="number" id="fov" value="63" min="40" max="100" step="1" style="width:4.5em"></label>
-      <button id="buildModel" disabled></button>
-      <button id="setZero" disabled></button>
-      <button id="resetZero" disabled></button>
-    </div>
-    <div class="note" id="m1Info"></div>
-  </section>
-
-  <section class="wide controls">
-    <input type="text" id="label" autocomplete="off">
-    <label><span id="durLabel"></span> <input type="number" id="dur" value="10" min="3" max="60" style="width:4em"></label>
-    <button id="rec" disabled></button>
-    <button id="snap" disabled></button>
-    <span class="note" id="recInfo"></span>
-  </section>
+  <p class="note" id="disclaimer"></p>
 </main>
+
+<aside id="sheet" hidden>
+  <div class="sheetHead"><span id="sheetTitle"></span><button id="sheetClose" aria-label="Закрыть">✕</button></div>
+  <div id="sheetBody"></div>
+</aside>
+
 <script type="module" src="./app.js"></script>
 </body>
 </html>
