@@ -37,8 +37,8 @@ export class Cancel {
   }
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-async function wait(ms: number, c: Cancel): Promise<boolean> {
+export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+export async function wait(ms: number, c: Cancel): Promise<boolean> {
   const end = performance.now() + ms;
   while (performance.now() < end) {
     if (c.cancelled) return true;
@@ -81,6 +81,43 @@ export async function timedCapture(o: { prep: number; duration: number; cancel: 
   } finally {
     o.onEnd?.();
     stopUi();
+  }
+}
+
+/**
+ * Захват до события: prep секунд до начала, затем запись (красная рамка) не дольше maxSec секунд;
+ * заканчивается раньше, как только isDone() вернёт true (зелёная рамка). Звука нет.
+ */
+export async function captureUntil(o: { prep: number; maxSec: number; cancel: Cancel; isDone: () => boolean; onStart?: () => void; onEnd?: () => void }): Promise<'done' | 'timeout' | 'cancel'> {
+  const timer = $('timer');
+  try {
+    timer.hidden = false;
+    timer.className = 'prep';
+    for (let s = o.prep; s > 0; s--) {
+      timer.textContent = String(s);
+      if (await wait(1000, o.cancel)) return 'cancel';
+    }
+    timer.className = 'rec';
+    setBorder('red');
+    o.onStart?.();
+    const end = performance.now() + o.maxSec * 1000;
+    while (performance.now() < end) {
+      if (o.isDone()) {
+        setBorder('green');
+        return 'done';
+      }
+      timer.textContent = `● ${Math.ceil((end - performance.now()) / 1000)} с`;
+      if (await wait(100, o.cancel)) {
+        setBorder('off');
+        return 'cancel';
+      }
+    }
+    setBorder('green');
+    return 'timeout';
+  } finally {
+    o.onEnd?.();
+    timer.hidden = true;
+    timer.className = '';
   }
 }
 

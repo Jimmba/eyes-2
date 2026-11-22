@@ -46,6 +46,13 @@
     .crops figure { margin:0; }
     .crops canvas { width:240px; height:120px; background:#000; border-radius:6px; display:block; }
     .crops figcaption { font-size:.75rem; color:var(--muted); }
+    #stim { position:fixed; inset:0; background:#8c8c8c; z-index:1500; color:#222; }
+    #stim[hidden] { display:none; }
+    #stimMsg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); max-width:80%; text-align:center; font-size:1.1rem; }
+    #stimMsg.big { font-size:5rem; font-weight:700; }
+    #stimDot { position:absolute; width:30px; height:30px; margin:-15px 0 0 -15px; border-radius:50%; background:#d00; border:3px solid #fff; box-shadow:0 0 0 2px #000; }
+    #stimFrame { position:absolute; border:3px dashed #111; transform:translateX(-50%); }
+    #stimCtl { position:absolute; left:0; right:0; bottom:10px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; align-items:center; padding:0 8px; }
     aside#sheet { position:fixed; left:0; right:0; bottom:0; max-height:44vh; overflow:auto; background:var(--panel); border-top:2px solid #394552; border-radius:14px 14px 0 0; z-index:40; padding:0 14px 14px; }
     aside#sheet[hidden] { display:none; }
     .sheetHead { position:sticky; top:0; background:var(--panel); display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 0 6px; }
@@ -68,6 +75,9 @@
 
 <nav id="menu" hidden>
   <button id="miCalib"></button>
+  <button id="miPrecise"></button>
+  <button id="miMeasure"></button>
+  <button id="miTrain"></button>
   <button id="miCsv"></button>
   <button id="miReset"></button>
   <details>
@@ -76,7 +86,8 @@
       <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
       <label><span id="resLabel"></span>
         <select id="res"><option value="1080">1920×1080</option><option value="720">1280×720</option></select></label>
-      <label><span id="fovLabel"></span> <input type="number" id="fov" value="63" min="40" max="100" step="1" style="width:4.5em"></label>
+      <label><span id="dirLabel"></span>
+        <select id="dirSel"><option value="away"></option><option value="closer"></option></select></label>
       <input type="text" id="label" autocomplete="off">
       <label><span id="durLabel"></span> <input type="number" id="dur" value="10" min="3" max="60" style="width:4em"></label>
       <button id="rec"></button>
@@ -107,6 +118,13 @@
 
   <p class="note" id="disclaimer"></p>
 </main>
+
+<div id="stim" hidden>
+  <div id="stimMsg"></div>
+  <div id="stimDot" hidden></div>
+  <div id="stimFrame" hidden></div>
+  <div id="stimCtl" hidden></div>
+</div>
 
 <aside id="sheet" hidden>
   <div class="sheetHead"><span id="sheetTitle"></span><button id="sheetClose" aria-label="Закрыть">✕</button></div>

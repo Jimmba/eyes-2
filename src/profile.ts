@@ -21,10 +21,26 @@ export interface ModelRec {
   cameraKey: string;
   at: number;
 }
+export interface GainsRec {
+  R: { h: number; v: number };
+  L: { h: number; v: number };
+  at: number;
+  info?: string;
+}
+export interface ScreenRec {
+  mmPerCssPx: number;
+  dpr: number; // при смене масштаба браузера размер CSS-пикселя меняется: калибровку нужно повторить
+  method: 'card' | 'diagonal';
+  at: number;
+}
 export interface Stored {
   v: 1;
   iris?: IrisRec;
   model?: ModelRec;
+  camera?: Record<string, number>; // поле зрения по вертикали (°): ключ «камера|ширина×высота»
+  gains?: Record<string, GainsRec>; // ключ: камера
+  screen?: ScreenRec;
+  ack?: number; // время подтверждения предупреждения о противопоказаниях
 }
 
 export function loadStored(): Stored {

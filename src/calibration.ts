@@ -6,7 +6,8 @@ import { DEFAULT_IRIS_MM, focalFromVerticalFov, isPlausibleIris } from './core/s
 import type { CardMarker } from './cardMark';
 import { t } from './i18n';
 import type { Recorder } from './recorder';
-import { FrameInfo, app, applyIris, applyModel, zeroValid } from './state';
+import { FrameInfo, app, applyIris, applyModel, currentFov, zeroValid } from './state';
+import { DET_DEFAULTS, thresholdFromNoise } from './core/breakDetector';
 import { Cancel, h, sheet, timedCapture } from './ui';
 
 export interface Env {
@@ -97,7 +98,7 @@ export async function runCalibration(env: Env): Promise<void> {
           let mm = NaN;
           let warn: ReturnType<typeof cardWarning> = null;
           try {
-            const f = focalFromVerticalFov(frozen.height, app.fovDeg);
+            const f = focalFromVerticalFov(frozen.height, currentFov(frozen.width, frozen.height));
             const pose = cardPose(env.marker.corners, { f, cx: frozen.width / 2, cy: frozen.height / 2 });
             mm = irisMmFromCard(irisPx, pose);
             warn = cardWarning(pose);
@@ -283,7 +284,8 @@ export async function runCalibration(env: Env): Promise<void> {
       const c = await screen(title3, nodes, [{ key: 'save', label: t.next, primary: true }, { key: 'redo', label: t.redo }]);
       if (c === 'cancel') return false;
       if (c === 'save') {
-        app.zero = { R: stR.median, L: stL.median, z: stZ.median, ipd: stI.median, irisMm: app.iris.irisMm, at: Date.now() };
+        const noise = thresholdFromNoise(S.map((x) => x.angR + x.angL), DET_DEFAULTS);
+        app.zero = { R: stR.median, L: stL.median, z: stZ.median, ipd: stI.median, irisMm: app.iris.irisMm, sigma: noise.sigma, at: Date.now() };
         env.refresh();
         return true;
       }

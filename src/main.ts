@@ -1,18 +1,21 @@
 import { DrawingUtils, FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
-import { runCalibration } from './calibration';
+import { runCalibration, type Env } from './calibration';
+import { runPrecise } from './precise';
+import { runMeasure, runTraining } from './training';
 import { onVideoFrame, startCamera, type CameraHandle } from './camera';
 import { CardMarker } from './cardMark';
 import { state } from './config';
 import { CONVENTIONS, RIGID_IDX, conventionById, fitScale, toMm } from './core/faceModel';
 import { TimeWindow, windowStat } from './core/filters';
-import { angleDeg, binocular, deviationDeg, eyeOffsetMm, interEyeMm, prismDiopters } from './core/gaze';
+import { angleDeg, binocular, cornersMidCam, deviationDeg, eyeOffsetMm, interEyeMm, prismDiopters } from './core/gaze';
+import { eyeCenterCam } from './core/screenGeom';
 import { mpMatrixToR } from './core/linalg';
 import { distanceMm, focalFromVerticalFov } from './core/scale';
 import { measureEye, median, poseFromMatrix, std, type EyeRaw, type EyeSide } from './geometry';
 import { t } from './i18n';
 import { Recorder } from './recorder';
 import { saveSnapshot } from './snapshot';
-import { FrameInfo, app, effectiveModel, publish, resetAll, restore, zeroValid } from './state';
+import { FrameInfo, app, currentFov, effectiveModel, fovCalibrated, loadGainsForCamera, publish, resetAll, restore, zeroValid } from './state';
 import { Cancel, timedCapture } from './ui';
 import { createLandmarker, type Landmarker } from './vision';
 
@@ -26,7 +29,7 @@ const statusEl = $('status');
 const startBtn = $<HTMLButtonElement>('start');
 const devBox = $<HTMLInputElement>('dev');
 const resSel = $<HTMLSelectElement>('res');
-const fovInput = $<HTMLInputElement>('fov');
+const dirSel = $<HTMLSelectElement>('dirSel');
 const recBtn = $<HTMLButtonElement>('rec');
 const snapBtn = $<HTMLButtonElement>('snap');
 const durInput = $<HTMLInputElement>('dur');
@@ -49,7 +52,12 @@ txt('miReset', t.menuReset);
 txt('devSummary', t.menuDev);
 txt('devLabel', t.dev);
 txt('resLabel', t.resLabel);
-txt('fovLabel', t.fovLabel);
+txt('dirLabel', t.dirLabel);
+(dirSel.options[0] as HTMLOptionElement).text = t.dirAway;
+(dirSel.options[1] as HTMLOptionElement).text = t.dirCloser;
+txt('miPrecise', t.menuPrecise);
+txt('miMeasure', t.menuMeasure);
+txt('miTrain', t.menuTrain);
 txt('durLabel', t.durLabel);
 recBtn.textContent = t.record;
 snapBtn.textContent = t.snapshot;
@@ -91,29 +99,30 @@ devBox.addEventListener('change', () => {
   state.isDev = devBox.checked;
   $('devPanel').hidden = !state.isDev;
 });
-fovInput.addEventListener('change', () => {
-  app.fovDeg = Math.min(100, Math.max(40, Number(fovInput.value) || 63));
+dirSel.addEventListener('change', () => {
+  app.direction = dirSel.value === 'closer' ? 'closer' : 'away';
 });
 
-$('miCalib').addEventListener('click', async () => {
-  menu.hidden = true;
-  if (busy) return;
-  busy = true;
-  try {
-    await runCalibration({
-      ensureCamera,
-      freezeFrame,
-      marker,
-      recorder,
-      refresh: updateChips,
-    });
-  } finally {
-    busy = false;
-    marker.stop();
-    recorder.scene = null;
-    updateChips();
-  }
-});
+const env: Env = { ensureCamera, freezeFrame, marker, recorder, refresh: updateChips };
+function menuAction(id: string, fn: (e: Env) => Promise<void>): void {
+  $(id).addEventListener('click', async () => {
+    menu.hidden = true;
+    if (busy) return;
+    busy = true;
+    try {
+      await fn(env);
+    } finally {
+      busy = false;
+      marker.stop();
+      recorder.scene = null;
+      updateChips();
+    }
+  });
+}
+menuAction('miCalib', runCalibration);
+menuAction('miPrecise', runPrecise);
+menuAction('miMeasure', runMeasure);
+menuAction('miTrain', runTraining);
 $('miCsv').addEventListener('click', () => {
   menu.hidden = true;
   if (recorder.count === 0) alert(t.csvEmpty);
@@ -144,6 +153,7 @@ async function startAll(): Promise<boolean> {
     const size = resSel.value === '720' ? { w: 1280, h: 720 } : { w: 1920, h: 1080 };
     cam = await startCamera(video, size);
     app.cameraKey = cam.stream.getVideoTracks()[0]?.label || 'camera';
+    loadGainsForCamera();
     engine = await createLandmarker();
     statusEl.textContent = `${t.running}: ${cam.info}; ${engine.delegate}`;
     startBtn.hidden = true;
@@ -208,7 +218,7 @@ const sg = (x: number, d = 1) => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + x.t
 function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: number, res: FaceLandmarkerResult, i: number, R: EyeRaw, L: EyeRaw, now: number) {
   const irisPx = (R.irisDiamPx + L.irisDiamPx) / 2;
   const sIris = app.iris.irisMm / irisPx;
-  const f = focalFromVerticalFov(h, app.fovDeg);
+  const f = focalFromVerticalFov(h, currentFov(w, h));
   const mat = res.facialTransformationMatrixes?.[i];
   const Rraw = mat ? mpMatrixToR(mat.data) : null;
   const model = effectiveModel();
@@ -226,8 +236,13 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
     s = sModel;
   }
   const z = distanceMm(f, s);
-  const angR = angleDeg(eyeOffsetMm(lm, w, h, 'right', s, Rimg, f).dxMm);
-  const angL = angleDeg(eyeOffsetMm(lm, w, h, 'left', s, Rimg, f).dxMm);
+  const offR = eyeOffsetMm(lm, w, h, 'right', s, Rimg, f);
+  const offL = eyeOffsetMm(lm, w, h, 'left', s, Rimg, f);
+  const rawH = { R: angleDeg(offR.dxMm), L: angleDeg(offL.dxMm) };
+  const rawV = { R: angleDeg(offR.dyMm), L: angleDeg(offL.dyMm) };
+  const g = app.gains;
+  const angR = rawH.R * (g?.R.h ?? 1);
+  const angL = rawH.L * (g?.L.h ?? 1);
   const ipd = interEyeMm(lm, w, h, s, f);
   const open = Math.min(R.openness, L.openness);
   win.push({ t: now, angR, angL, open, z, ipd });
@@ -239,6 +254,7 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
   const stZ = windowStat(it.map((x) => x.z), op);
   const stI = windowStat(it.map((x) => x.ipd), op);
   const ok = stR.ok && stL.ok && stZ.ok;
+  const valid = open >= Math.max(0.15, 0.75 * median(op));
 
   let devR = NaN, devL = NaN, verg = NaN, vers = NaN;
   if (zeroValid() && app.zero && ok) {
@@ -246,18 +262,25 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
     devL = deviationDeg(stL.median, app.zero.L, stZ.median, app.zero.z, stI.median);
     ({ vergenceDeg: verg, versionDeg: vers } = binocular(devR, devL));
   }
+  let devInst = NaN; // по одному кадру: для детектора срыва
+  if (zeroValid() && app.zero) devInst = deviationDeg(angR, app.zero.R, z, app.zero.z, ipd) + deviationDeg(angL, app.zero.L, z, app.zero.z, ipd);
 
-  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, irisPx, open, angR, angL, z, ipd, sIris, f };
+  const eyeCam = Rimg ? { R: eyeCenterCam(cornersMidCam(lm, w, h, 'right', s, f), Rimg), L: eyeCenterCam(cornersMidCam(lm, w, h, 'left', s, f), Rimg) } : undefined;
+  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, Rimg, irisPx, open, openR: R.openness, openL: L.openness, angR, angL, rawH, rawV, eyeCam, z, ipd, sIris, f, devInst, valid };
+  const fovTxt = `${currentFov(w, h).toFixed(0)}°${fovCalibrated(w, h) ? '' : ' (по умолчанию)'}`;
   const lines = [
-    `── M1 ── радужка ${app.iris.irisMm.toFixed(2)} мм (${t.methodNames[app.iris.method]}), FOV ${app.fovDeg}°, режим ${Rimg ? '3D (поза)' : '2D (нет матрицы)'}`,
+    `── M1 ── радужка ${app.iris.irisMm.toFixed(2)} мм (${t.methodNames[app.iris.method]}), FOV ${fovTxt}, режим ${Rimg ? '3D (поза)' : '2D (нет матрицы)'}`,
     `мм/px: радужка ${sIris.toFixed(4)}${model ? `, модель ${sModel.toFixed(4)} (невязка ${resid.toFixed(1)} px)` : ''}  → Z ${z.toFixed(0)} мм`,
     model ? `модель лица: конв. ${model.convention}, разброс ${model.spreadMm.toFixed(2)} мм, кадров ${model.frames}` : 'модель лица: нет',
+    g ? `коэффициенты глаз: R ${g.R.h.toFixed(2)} L ${g.L.h.toFixed(2)} (по горизонтали)` : 'коэффициенты глаз: нет (1,00)',
     `угол к носу (1,5 с, ${stR.n}/${stR.total}${ok ? '' : ', НЕВАЛИДНО'}): R ${sg(stR.median)}° (${sg(prismDiopters(stR.median))} ПД)  L ${sg(stL.median)}° (${sg(prismDiopters(stL.median))} ПД)`,
     zeroValid() && app.zero
-      ? `ноль: R ${sg(app.zero.R)}° L ${sg(app.zero.L)}° на ${app.zero.z.toFixed(0)} мм | ОТКЛОНЕНИЕ R ${sg(devR)}° L ${sg(devL)}° вергенция ${sg(verg)}° (${sg(prismDiopters(verg))} ПД) версия ${sg(vers)}°`
+      ? `ноль: R ${sg(app.zero.R)}° L ${sg(app.zero.L)}° на ${app.zero.z.toFixed(0)} мм | ОТКЛОНЕНИЕ R ${sg(devR)}° L ${sg(devL)}° вергенция ${sg(verg)}° (${sg(prismDiopters(verg))} ПД) версия ${sg(vers)}° | по кадру ${sg(devInst)}°`
       : 'ноль: не задан',
   ];
-  const csv: (number | string)[] = [s, z, angR, angL, devR, devL, verg, app.iris.method, app.iris.irisMm];
+  const ev = app.pendingEvent;
+  app.pendingEvent = '';
+  const csv: (number | string)[] = [s, z, angR, angL, devR, devL, verg, app.iris.method, app.iris.irisMm, devInst, ev];
   return { info, lines, csv };
 }
 
@@ -338,12 +361,12 @@ function processFrame(now: number): void {
 
   const res = engine.lm.detectForVideo(video, now);
   const i = pickFace(res);
-  const f0 = focalFromVerticalFov(h, app.fovDeg);
+  const f0 = focalFromVerticalFov(h, currentFov(w, h));
   if (i < 0) {
-    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, angR: NaN, angL: NaN, z: NaN, ipd: NaN, sIris: NaN, f: f0 });
+    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, openR: NaN, openL: NaN, angR: NaN, angL: NaN, rawH: { R: NaN, L: NaN }, rawV: { R: NaN, L: NaN }, z: NaN, ipd: NaN, sIris: NaN, f: f0, devInst: NaN, valid: false });
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
-    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN]);
+    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '']);
     return;
   }
   const lm = res.faceLandmarks[i];

@@ -83,3 +83,10 @@ export const binocular = (devRight: number, devLeft: number) => ({
   vergenceDeg: devRight + devLeft,
   versionDeg: (devRight - devLeft) / 2,
 });
+
+/** Середина уголков глаза в системе камеры (мм, z от камеры до точки). Z = f·s: глубина плоскости лица. */
+export function cornersMidCam(lm: LM[], w: number, h: number, side: Side, s: number, f: number): V3 {
+  const e = EYE[side];
+  const [o, i] = toMm(lm, [e.outer, e.inner], w, h, s, f);
+  return [(o[0] + i[0]) / 2, (o[1] + i[1]) / 2, f * s + (o[2] + i[2]) / 2];
+}

@@ -2,7 +2,7 @@
 import type { FaceModel, LM } from './core/faceModel';
 import type { M3, V3 } from './core/linalg';
 import { ScaleMethod, ScaleSetup, defaultScale } from './core/scale';
-import { clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
+import { GainsRec, ScreenRec, clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
 
 export interface ZeroRec {
   R: number; // угол правого глаза к носу, °
@@ -10,10 +10,11 @@ export interface ZeroRec {
   z: number; // дистанция, мм
   ipd: number; // межуголковое расстояние, мм
   irisMm: number; // размер радужки, при котором снят ноль
+  sigma: number; // шум сигнала вергенции в покое (после медианы из 3 кадров), °
   at: number;
 }
 
-/** Результат обработки одного кадра: то, что нужно мастеру калибровки. */
+/** Результат обработки одного кадра: то, что нужно мастерам калибровки и тренировке. */
 export interface FrameInfo {
   t: number;
   face: boolean;
@@ -21,15 +22,26 @@ export interface FrameInfo {
   h: number;
   lm?: LM[];
   Rraw?: M3 | null;
+  Rimg?: M3 | null;
   irisPx: number;
-  open: number;
-  angR: number;
+  open: number; // min(правый, левый)
+  openR: number;
+  openL: number;
+  angR: number; // с учётом коэффициентов глаз
   angL: number;
+  rawH: { R: number; L: number }; // горизонтальный угол без коэффициента
+  rawV: { R: number; L: number }; // вертикальный угол без коэффициента (вверх > 0)
+  eyeCam?: { R: V3; L: V3 }; // центры глазных яблок в системе камеры, мм
   z: number;
   ipd: number;
   sIris: number; // мм/px по текущему размеру радужки
   f: number; // фокусное расстояние, px
+  devInst: number; // вергенция от нуля по одному кадру, ° (NaN без нуля)
+  valid: boolean; // кадр годен для детектора (лицо, глаза открыты)
 }
+
+export type Gains = GainsRec;
+export type ScreenCal = ScreenRec;
 
 export const app = {
   iris: defaultScale() as ScaleSetup,
@@ -39,14 +51,42 @@ export const app = {
   modelCamera: '',
   modelAt: 0,
   zero: null as ZeroRec | null,
-  fovDeg: 63,
+  cameraFov: {} as Record<string, number>,
+  gains: null as Gains | null,
+  gainsAll: {} as Record<string, Gains>,
+  screen: null as ScreenCal | null,
+  direction: 'away' as 'away' | 'closer',
+  ack: 0,
   cameraKey: '',
+  lastInfo: null as FrameInfo | null,
+  pendingEvent: '',
   sinks: new Set<(i: FrameInfo) => void>(),
 };
 
 export function publish(info: FrameInfo): void {
+  app.lastInfo = info;
   for (const s of app.sinks) s(info);
 }
+
+export const DEFAULT_FOV = 63;
+export const fovKey = (w: number, h: number): string => `${app.cameraKey}|${w}x${h}`;
+export const currentFov = (w: number, h: number): number => app.cameraFov[fovKey(w, h)] ?? DEFAULT_FOV;
+export const fovCalibrated = (w: number, h: number): boolean => fovKey(w, h) in app.cameraFov;
+export function setFov(w: number, h: number, deg: number): void {
+  app.cameraFov[fovKey(w, h)] = deg;
+  persist();
+}
+
+export function setGains(g: Gains): void {
+  app.gains = g;
+  app.gainsAll[app.cameraKey] = g;
+  persist();
+}
+export const loadGainsForCamera = (): void => {
+  app.gains = app.gainsAll[app.cameraKey] ?? null;
+};
+
+export const screenValid = (): boolean => !!app.screen && Math.abs(app.screen.dpr - window.devicePixelRatio) < 0.01;
 
 /** Модель, пересчитанная под текущий размер радужки (мм линейно зависят от неё). */
 export function effectiveModel(): FaceModel | null {
@@ -63,6 +103,10 @@ export function persist(): void {
     v: 1,
     iris: app.irisAt ? { mm: app.iris.irisMm, method: app.iris.method, at: app.irisAt } : undefined,
     model: app.model ? modelToRec(app.model, app.modelIrisMm, app.modelCamera, app.modelAt) : undefined,
+    camera: Object.keys(app.cameraFov).length ? app.cameraFov : undefined,
+    gains: Object.keys(app.gainsAll).length ? app.gainsAll : undefined,
+    screen: app.screen ?? undefined,
+    ack: app.ack || undefined,
   });
 }
 
@@ -93,6 +137,10 @@ export function restore(): void {
     app.modelCamera = s.model.cameraKey;
     app.modelAt = s.model.at;
   }
+  app.cameraFov = s.camera ?? {};
+  app.gainsAll = s.gains ?? {};
+  app.screen = s.screen ?? null;
+  app.ack = s.ack ?? 0;
 }
 
 export function resetAll(): void {
@@ -102,4 +150,9 @@ export function resetAll(): void {
   app.model = null;
   app.modelAt = 0;
   app.zero = null;
+  app.cameraFov = {};
+  app.gains = null;
+  app.gainsAll = {};
+  app.screen = null;
+  app.ack = 0;
 }

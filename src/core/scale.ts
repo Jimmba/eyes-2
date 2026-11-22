@@ -40,3 +40,8 @@ export const focalFromKnownDistance = (irisPx: number, irisMm: number, distMm: n
 
 /** Z = f·(мм/px). */
 export const distanceMm = (focalPx: number, mmPerPx: number): number => focalPx * mmPerPx;
+
+/** Вертикальное поле зрения (°) по фокусному расстоянию и высоте кадра. */
+export const fovFromFocal = (heightPx: number, focalPx: number): number => (2 * Math.atan(heightPx / 2 / focalPx) * 180) / Math.PI;
+export const FOV_RANGE_DEG: [number, number] = [40, 100];
+export const isPlausibleFov = (deg: number): boolean => deg >= FOV_RANGE_DEG[0] && deg <= FOV_RANGE_DEG[1];
