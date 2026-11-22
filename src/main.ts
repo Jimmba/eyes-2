@@ -1,6 +1,5 @@
 import { DrawingUtils, FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import { runCalibration, type Env } from './calibration';
-import { runPrecise } from './precise';
 import { runMeasure, runTraining } from './training';
 import { onVideoFrame, startCamera, type CameraHandle } from './camera';
 import { CardMarker } from './cardMark';
@@ -55,7 +54,6 @@ txt('resLabel', t.resLabel);
 txt('dirLabel', t.dirLabel);
 (dirSel.options[0] as HTMLOptionElement).text = t.dirAway;
 (dirSel.options[1] as HTMLOptionElement).text = t.dirCloser;
-txt('miPrecise', t.menuPrecise);
 txt('miMeasure', t.menuMeasure);
 txt('miTrain', t.menuTrain);
 txt('durLabel', t.durLabel);
@@ -120,7 +118,6 @@ function menuAction(id: string, fn: (e: Env) => Promise<void>): void {
   });
 }
 menuAction('miCalib', runCalibration);
-menuAction('miPrecise', runPrecise);
 menuAction('miMeasure', runMeasure);
 menuAction('miTrain', runTraining);
 $('miCsv').addEventListener('click', () => {

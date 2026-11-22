@@ -18,6 +18,7 @@ export interface ModelRec {
   yawRangeDeg: number;
   pitchRangeDeg: number;
   builtForIrisMm: number; // размер радужки, при котором модель построена (при смене радужки масштабируется)
+  builtFovDeg?: number; // поле зрения камеры, при котором модель построена
   cameraKey: string;
   at: number;
 }
@@ -25,6 +26,7 @@ export interface GainsRec {
   R: { h: number; v: number };
   L: { h: number; v: number };
   at: number;
+  fovAtFit?: number; // поле зрения камеры, при котором подобраны коэффициенты
   info?: string;
 }
 export interface ScreenRec {
@@ -69,7 +71,7 @@ export function clearStored(): void {
   }
 }
 
-export const modelToRec = (m: FaceModel, builtForIrisMm: number, cameraKey: string, at: number): ModelRec => ({
+export const modelToRec = (m: FaceModel, builtForIrisMm: number, cameraKey: string, at: number, builtFovDeg: number): ModelRec => ({
   points: m.points.map((p) => [p[0], p[1], p[2]] as [number, number, number]),
   convention: m.convention,
   spreadMm: m.spreadMm,
@@ -77,6 +79,7 @@ export const modelToRec = (m: FaceModel, builtForIrisMm: number, cameraKey: stri
   yawRangeDeg: m.yawRangeDeg,
   pitchRangeDeg: m.pitchRangeDeg,
   builtForIrisMm,
+  builtFovDeg,
   cameraKey,
   at,
 });

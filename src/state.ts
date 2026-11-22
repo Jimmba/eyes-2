@@ -48,6 +48,7 @@ export const app = {
   irisAt: 0,
   model: null as FaceModel | null,
   modelIrisMm: 0,
+  modelFov: 63,
   modelCamera: '',
   modelAt: 0,
   zero: null as ZeroRec | null,
@@ -102,7 +103,7 @@ export function persist(): void {
   saveStored({
     v: 1,
     iris: app.irisAt ? { mm: app.iris.irisMm, method: app.iris.method, at: app.irisAt } : undefined,
-    model: app.model ? modelToRec(app.model, app.modelIrisMm, app.modelCamera, app.modelAt) : undefined,
+    model: app.model ? modelToRec(app.model, app.modelIrisMm, app.modelCamera, app.modelAt, app.modelFov) : undefined,
     camera: Object.keys(app.cameraFov).length ? app.cameraFov : undefined,
     gains: Object.keys(app.gainsAll).length ? app.gainsAll : undefined,
     screen: app.screen ?? undefined,
@@ -117,8 +118,9 @@ export function applyIris(mm: number, method: ScaleMethod): void {
   persist();
 }
 
-export function applyModel(m: FaceModel): void {
+export function applyModel(m: FaceModel, fovDeg = DEFAULT_FOV): void {
   app.model = m;
+  app.modelFov = fovDeg;
   app.modelIrisMm = app.iris.irisMm;
   app.modelCamera = app.cameraKey;
   app.modelAt = Date.now();
@@ -134,6 +136,7 @@ export function restore(): void {
   if (s.model) {
     app.model = recToModel(s.model);
     app.modelIrisMm = s.model.builtForIrisMm;
+    app.modelFov = s.model.builtFovDeg ?? DEFAULT_FOV;
     app.modelCamera = s.model.cameraKey;
     app.modelAt = s.model.at;
   }

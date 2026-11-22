@@ -6,9 +6,10 @@ import { DEFAULT_IRIS_MM, focalFromVerticalFov, isPlausibleIris } from './core/s
 import type { CardMarker } from './cardMark';
 import { t } from './i18n';
 import type { Recorder } from './recorder';
-import { FrameInfo, app, applyIris, applyModel, currentFov, zeroValid } from './state';
+import { DEFAULT_FOV, FrameInfo, app, applyIris, applyModel, currentFov, zeroValid } from './state';
 import { DET_DEFAULTS, thresholdFromNoise } from './core/breakDetector';
-import { Cancel, h, sheet, timedCapture } from './ui';
+import { Cancel, h, sheet, sleep, timedCapture } from './ui';
+import { stepDistance, stepRefine } from './precise';
 
 export interface Env {
   ensureCamera(): Promise<boolean>;
@@ -25,7 +26,7 @@ interface Btn {
 }
 
 const p = (text: string, cls = '') => h('p', { class: cls }, text);
-const why = (text: string) => h('p', { class: 'why' }, h('b', null, t.whyLabel), text);
+const why = (text: string) => h('p', { class: 'why' }, text);
 const fmtDate = (ms: number) => new Date(ms).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
 const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString('ru-RU', { timeStyle: 'short' });
 const sg = (x: number, d = 1) => (x >= 0 ? '+' : '') + x.toFixed(d);
@@ -56,6 +57,8 @@ export async function runCalibration(env: Env): Promise<void> {
     sheet.set(t.wizardStep(1, t.s1Name), p(t.needCamera));
     return;
   }
+
+  for (let k = 0; k < 30 && !app.lastInfo; k++) await sleep(100); // нужен размер кадра для проверки записанных значений
 
   // ---------------- шаг 1: размер радужки ----------------
   const title1 = t.wizardStep(1, t.s1Name);
@@ -189,16 +192,18 @@ export async function runCalibration(env: Env): Promise<void> {
   }
 
   // ---------------- шаг 2: модель лица ----------------
-  const title2 = t.wizardStep(2, t.s2Name);
+  const title2 = t.wizardStep(3, t.s2Name);
   async function stepModel(): Promise<boolean> {
     if (app.model) {
       const sameCam = !app.modelCamera || app.modelCamera === app.cameraKey;
-      const btns: Btn[] = sameCam
+      const fovNow = app.lastInfo ? currentFov(app.lastInfo.w, app.lastInfo.h) : DEFAULT_FOV;
+      const fovChanged = Math.abs(fovNow - app.modelFov) > 5;
+      const btns: Btn[] = sameCam && !fovChanged
         ? [{ key: 'skip', label: t.skip, primary: true }, { key: 'redo', label: t.redo }]
         : [{ key: 'redo', label: t.redo, primary: true }, { key: 'skip', label: t.skip }];
       const a = await screen(
         title2,
-        [why(t.s2Why), p(`${t.s2Saved} (${fmtDate(app.modelAt)}).`, 'big'), !sameCam && p(t.s2OtherCam, 'warn')],
+        [why(t.s2Why), p(`${t.s2Saved} (${fmtDate(app.modelAt)}).`, 'big'), !sameCam && p(t.s2OtherCam, 'warn'), sameCam && fovChanged && p(t.s2OtherFov, 'warn')],
         btns,
       );
       if (a === 'cancel') return false;
@@ -234,7 +239,7 @@ export async function runCalibration(env: Env): Promise<void> {
       const c = await screen(title2, nodes, btns);
       if (c === 'cancel') return false;
       if (c === 'save') {
-        applyModel(m);
+        applyModel(m, app.lastInfo ? currentFov(app.lastInfo.w, app.lastInfo.h) : DEFAULT_FOV);
         env.refresh();
         return true;
       }
@@ -242,7 +247,7 @@ export async function runCalibration(env: Env): Promise<void> {
   }
 
   // ---------------- шаг 3: ноль ----------------
-  const title3 = t.wizardStep(3, t.s3Name);
+  const title3 = t.wizardStep(4, t.s3Name);
   async function stepZero(): Promise<boolean> {
     if (zeroValid() && app.zero) {
       const z = app.zero;
@@ -292,9 +297,12 @@ export async function runCalibration(env: Env): Promise<void> {
     }
   }
 
+  const ctx = { env, cancel, screen };
   if (!(await stepIris())) return;
+  if (!(await stepDistance(ctx, t.wizardStep(2, t.distName)))) return; // до модели: поле зрения нужно для её построения
   if (!(await stepModel())) return;
   if (!(await stepZero())) return;
+  if (!(await stepRefine(ctx, t.wizardStep(5, t.rfName)))) return;
 
   for (;;) {
     const a = await screen(t.doneTitle, [p(t.doneText)], [{ key: 'close', label: t.close, primary: true }, { key: 'csv', label: t.menuCsv }]);
