@@ -84,15 +84,24 @@ test('неточно отмеченные углы дают предупрежд
   assert.equal(cardWarning(cardPose(corners({ yaw: 45, pitch: 0, roll: 0 }, [0, 0, 400]), K)), 'tilt');
 });
 
-test('от кадра до диаметра радужки: карта у щеки, радужка из ландмарок, ошибка < 2 %', () => {
+test('от кадра до диаметра радужки: карта у щеки на 12 мм глубже радужки, с поправкой ошибка < 2 %', () => {
   const rnd = rng(7);
   const errs: number[] = [];
   for (let i = 0; i < 30; i++) {
     const fr = render(fixate(400), { yaw: 3, pitch: 2, roll: 1, zMm: 400 }, 0.3, rnd);
     const irisPx = (irisDiamPx(fr.lm, CAM.w, CAM.h, 'right') + irisDiamPx(fr.lm, CAM.w, CAM.h, 'left')) / 2;
-    const c = corners({ yaw: 12, pitch: 6, roll: 20 }, [-95, 15, 400], 1, rnd); // карта рядом с лицом на той же глубине
+    const c = corners({ yaw: 12, pitch: 6, roll: 20 }, [-95, 15, 412], 1, rnd); // карта у щеки, на 12 мм глубже радужки
     errs.push(irisMmFromCard(irisPx, cardPose(c, K)) / IRIS_MM - 1);
   }
   const m = errs.reduce((a, b) => a + b, 0) / errs.length;
   assert.ok(Math.abs(m) < 0.02, `смещение ${(m * 100).toFixed(2)} %`);
+});
+
+test('без поправки на глубину радужка по карте завышается на 12/Z (≈ 3 % на 40 см)', () => {
+  const rnd = rng(9);
+  const fr = render(fixate(400), { yaw: 3, pitch: 2, roll: 1, zMm: 400 }, 0.3, rnd);
+  const irisPx = (irisDiamPx(fr.lm, CAM.w, CAM.h, 'right') + irisDiamPx(fr.lm, CAM.w, CAM.h, 'left')) / 2;
+  const pose = cardPose(corners({ yaw: 12, pitch: 6, roll: 20 }, [-95, 15, 412], 1, rnd), K);
+  const raw = irisMmFromCard(irisPx, pose, 0) / IRIS_MM - 1;
+  assert.ok(raw > 0.015 && raw < 0.05, `завышение ${(raw * 100).toFixed(2)} %`);
 });

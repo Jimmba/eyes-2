@@ -125,8 +125,14 @@ export function cardPose(corners: P2[], cam: CamK, wMm = CARD_WIDTH_MM, hMm = CA
   return best!;
 }
 
-/** Диаметр радужки (мм) = диаметр в пикселях × мм на пиксель в плоскости карты. */
-export const irisMmFromCard = (irisPx: number, pose: CardPose): number => irisPx * pose.mmPerPx;
+/**
+ * Карта прижата к щеке и лежит глубже радужки: роговица выступает вперёд на 10-16 мм. Радужка ближе к камере,
+ * поэтому в кадре выглядит крупнее, чем была бы в плоскости карты, и без поправки диаметр завышается
+ * на depthOffsetMm / расстояние (на 20-25 см это 5-6 %). Поправка: D = px · мм/px · (Z − δ) / Z.
+ */
+export const CARD_DEPTH_OFFSET_MM = 12;
+export const irisMmFromCard = (irisPx: number, pose: CardPose, depthOffsetMm = CARD_DEPTH_OFFSET_MM): number =>
+  irisPx * pose.mmPerPx * (1 - depthOffsetMm / pose.distanceMm);
 
 export type CardWarning = 'tilt' | 'corners' | null;
 /** Предупреждения для пользователя: слишком большой наклон или неточно отмечены углы. */

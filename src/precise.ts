@@ -5,10 +5,10 @@ import type { Env } from './calibration';
 import { combineGains, fitGain, type GainFit } from './core/eyeFit';
 import { median } from './core/filters';
 import { rToEuler } from './core/linalg';
-import { focalFromKnownDistance, fovFromFocal, isPlausibleFov } from './core/scale';
+import { focalFromKnownDistance, fovFromFocal, fovVerticalFromDiagonal, isPlausibleFov } from './core/scale';
 import { ScreenSpec, mmPerCssPxFromCard, screenToCam, trueGazeDeg } from './core/screenGeom';
 import { t } from './i18n';
-import { FrameInfo, app, currentFov, fovCalibrated, persist, screenValid, setFov, setGains } from './state';
+import { FrameInfo, app, currentFov, fovCalibrated, persist, screenValid, setDistK, setFov, setGains } from './state';
 import { stim } from './stim';
 import { Cancel, h, setBorder, sheet, timedCapture, wait } from './ui';
 import { fmtDate, makeScreen, p, why } from './wizard';
@@ -37,6 +37,41 @@ function collect(cb: (i: FrameInfo) => void): () => void {
 // поле зрения камеры. Дальше расстояние считается само: Z = f·D/d для любого положения лица.
 // Обязательный шаг: пропуск доступен, только если значение для этой камеры и разрешения уже записано.
 // =====================================================================================
+const S0size = (): { w: number; h: number } => ({ w: app.lastInfo?.w ?? 0, h: app.lastInfo?.h ?? 0 });
+
+/** Ввод поля зрения вручную: прямо (по вертикали, °) или по диагонали из паспорта камеры. */
+async function manualFov(c: Ctx, title: string, size: { w: number; h: number }): Promise<'saved' | 'back' | 'cancel'> {
+  const { screen } = c;
+  for (;;) {
+    const cur = size.w ? currentFov(size.w, size.h) : 63;
+    const vert = h('input', { type: 'number', min: '40', max: '100', step: '0.5', value: cur.toFixed(1) });
+    const diag = h('input', { type: 'number', min: '50', max: '140', step: '0.5', value: '' });
+    const a = await screen(
+      title,
+      [
+        p(t.distManualHow),
+        h('p', null, t.distManualVert + ': ', vert, ' °'),
+        h('p', null, t.distManualDiag + ': ', diag, ' °'),
+        p(t.distManualNote, 'why'),
+      ],
+      [{ key: 'save', label: t.save, primary: true }, { key: 'back', label: t.back }],
+    );
+    if (a === 'cancel') return 'cancel';
+    if (a === 'back') return 'back';
+    let fov = Number(vert.value);
+    if (diag.value.trim() && size.w) fov = fovVerticalFromDiagonal(Number(diag.value), size.w, size.h);
+    if (!size.w || !isPlausibleFov(fov)) {
+      await screen(title, [p(t.distBad + ` (${Number.isFinite(fov) ? fov.toFixed(0) : '?'}°)`, 'warn')], [{ key: 'ok', label: t.back, primary: true }]);
+      continue;
+    }
+    setFov(size.w, size.h, fov);
+    setDistK(size.w, size.h, 1);
+    c.env.refresh();
+    const d = await screen(title, [h('p', { class: 'big' }, `${t.distResult}: ${fov.toFixed(1)}° (${t.distManualDone})`), p(t.distCheckHint)], [{ key: 'next', label: t.next, primary: true }]);
+    return d === 'cancel' ? 'cancel' : 'saved';
+  }
+}
+
 export async function stepDistance(c: Ctx, title: string): Promise<boolean> {
   const { env, cancel, screen } = c;
   const w0 = app.lastInfo?.w ?? 0;
@@ -52,8 +87,14 @@ export async function stepDistance(c: Ctx, title: string): Promise<boolean> {
   }
   for (;;) {
     const input = h('input', { type: 'number', min: '20', max: '100', step: '0.1', value: String(A4_LONG_CM) });
-    const a = await screen(title, [why(t.whyLabel, t.distWhy), p(t.distHow), h('p', null, t.distInput + ': ', input)], [{ key: 'go', label: t.start2, primary: true }]);
+    const a = await screen(title, [why(t.whyLabel, t.distWhy), p(t.distHow), h('p', null, t.distInput + ': ', input)], [{ key: 'go', label: t.start2, primary: true }, { key: 'manual', label: t.distManual }]);
     if (a === 'cancel') return false;
+    if (a === 'manual') {
+      const r = await manualFov(c, title, S0size());
+      if (r === 'cancel') return false;
+      if (r === 'saved') return true;
+      continue;
+    }
     const zMm = Number(input.value) * 10;
     if (!(zMm >= 200 && zMm <= 1000)) continue;
     sheet.set(title, p(t.distWait, 'big'));
@@ -83,6 +124,7 @@ export async function stepDistance(c: Ctx, title: string): Promise<boolean> {
     if (d === 'cancel') return false;
     if (d === 'save') {
       setFov(S[0].w, S[0].h, fov);
+      setDistK(S[0].w, S[0].h, 1); // поле зрения новое: прежняя поправка по линейке недействительна
       env.refresh();
       return true;
     }

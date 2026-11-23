@@ -30,3 +30,13 @@ test('расстояние: f из известной дистанции и об
 test('запасной f по вертикальному FOV 63°', () => {
   assert.ok(Math.abs(focalFromVerticalFov(1920) - 1566.6) < 1);
 });
+
+test('поле зрения по диагонали паспорта: кадр 16:9 из сенсора 4:3 и портретный 9:16', async () => {
+  const { fovVerticalFromDiagonal } = await import('../src/core/scale');
+  // диагональ 80°: вертикаль 16:9 заметно меньше, чем у портретного кадра (там вертикаль длинная сторона)
+  const land = fovVerticalFromDiagonal(80, 1280, 720);
+  const port = fovVerticalFromDiagonal(80, 720, 1280);
+  assert.ok(land > 35 && land < 50, `landscape ${land}`);
+  assert.ok(port > 55 && port < 75, `portrait ${port}`);
+  assert.ok(Math.abs(fovVerticalFromDiagonal(80, 4, 3) - 2 * Math.atan(0.6 * Math.tan((80 * Math.PI) / 360)) * 180 / Math.PI) < 1e-6);
+});

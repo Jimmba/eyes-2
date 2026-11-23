@@ -1,6 +1,7 @@
 import { DrawingUtils, FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import { runCalibration, type Env } from './calibration';
 import { runMeasure, runTraining } from './training';
+import { runDistanceCheck } from './distCheck';
 import { onVideoFrame, startCamera, type CameraHandle } from './camera';
 import { CardMarker } from './cardMark';
 import { state } from './config';
@@ -14,7 +15,7 @@ import { measureEye, median, poseFromMatrix, std, type EyeRaw, type EyeSide } fr
 import { t } from './i18n';
 import { Recorder } from './recorder';
 import { saveSnapshot } from './snapshot';
-import { FrameInfo, app, currentFov, effectiveModel, fovCalibrated, loadGainsForCamera, publish, resetAll, restore, zeroValid } from './state';
+import { FrameInfo, app, currentDistK, currentFov, effectiveModel, fovCalibrated, loadGainsForCamera, publish, resetAll, restore, zeroValid } from './state';
 import { Cancel, timedCapture } from './ui';
 import { createLandmarker, type Landmarker } from './vision';
 
@@ -56,6 +57,11 @@ txt('dirLabel', t.dirLabel);
 (dirSel.options[1] as HTMLOptionElement).text = t.dirCloser;
 txt('miMeasure', t.menuMeasure);
 txt('miTrain', t.menuTrain);
+txt('miDist', t.menuDist);
+txt('camTitle', t.camTitle);
+txt('camText', t.camText);
+txt('camOk', t.camOn);
+txt('camLater', t.camLater);
 txt('durLabel', t.durLabel);
 recBtn.textContent = t.record;
 snapBtn.textContent = t.snapshot;
@@ -77,6 +83,7 @@ let cam: CameraHandle | null = null;
 let engine: Landmarker | null = null;
 let stopLoop: (() => void) | null = null;
 let lastPanelText = '';
+const zBuf: number[] = [];
 let busy = false;
 
 // ---- индикаторы вверху ----
@@ -120,6 +127,7 @@ function menuAction(id: string, fn: (e: Env) => Promise<void>): void {
 menuAction('miCalib', runCalibration);
 menuAction('miMeasure', runMeasure);
 menuAction('miTrain', runTraining);
+menuAction('miDist', runDistanceCheck);
 $('miCsv').addEventListener('click', () => {
   menu.hidden = true;
   if (recorder.count === 0) alert(t.csvEmpty);
@@ -141,6 +149,39 @@ function ensureCamera(): Promise<boolean> {
   return starting;
 }
 startBtn.addEventListener('click', () => void ensureCamera());
+
+// ---- окно запроса камеры при старте ----
+const camModal = $('camModal');
+const camErr = $('camErr');
+const camOk = $<HTMLButtonElement>('camOk');
+async function cameraPermission(): Promise<PermissionState | 'unknown'> {
+  try {
+    const st = await navigator.permissions.query({ name: 'camera' as PermissionName });
+    return st.state;
+  } catch {
+    return 'unknown'; // например Safari: статус недоступен, спросим окном
+  }
+}
+async function askCamera(): Promise<void> {
+  camOk.disabled = true;
+  camErr.textContent = '';
+  const ok = await ensureCamera();
+  camOk.disabled = false;
+  if (ok) {
+    camModal.hidden = true;
+    return;
+  }
+  camOk.textContent = t.camRetry;
+  camErr.textContent = (await cameraPermission()) === 'denied' ? t.camDenied : statusEl.textContent || t.camFail;
+}
+camOk.addEventListener('click', () => void askCamera());
+$('camLater').addEventListener('click', () => (camModal.hidden = true));
+async function startupCamera(): Promise<void> {
+  if ((await cameraPermission()) === 'granted') {
+    if (await ensureCamera()) return; // разрешение уже есть: включаем без вопросов
+  }
+  camModal.hidden = false; // иначе объясняем и просим
+}
 
 async function startAll(): Promise<boolean> {
   startBtn.disabled = true;
@@ -232,7 +273,10 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
     resid = fit.residualPx;
     s = sModel;
   }
-  const z = distanceMm(f, s);
+  const z = distanceMm(f, s) * currentDistK(w, h);
+  zBuf.push(z);
+  if (zBuf.length > 7) zBuf.shift();
+  const zs = median(zBuf);
   const offR = eyeOffsetMm(lm, w, h, 'right', s, Rimg, f);
   const offL = eyeOffsetMm(lm, w, h, 'left', s, Rimg, f);
   const rawH = { R: angleDeg(offR.dxMm), L: angleDeg(offL.dxMm) };
@@ -263,11 +307,11 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
   if (zeroValid() && app.zero) devInst = deviationDeg(angR, app.zero.R, z, app.zero.z, ipd) + deviationDeg(angL, app.zero.L, z, app.zero.z, ipd);
 
   const eyeCam = Rimg ? { R: eyeCenterCam(cornersMidCam(lm, w, h, 'right', s, f), Rimg), L: eyeCenterCam(cornersMidCam(lm, w, h, 'left', s, f), Rimg) } : undefined;
-  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, Rimg, irisPx, open, openR: R.openness, openL: L.openness, angR, angL, rawH, rawV, eyeCam, z, ipd, sIris, f, devInst, valid };
+  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, Rimg, irisPx, open, openR: R.openness, openL: L.openness, angR, angL, rawH, rawV, eyeCam, z, zs, ipd, sIris, f, devInst, valid };
   const fovTxt = `${currentFov(w, h).toFixed(0)}°${fovCalibrated(w, h) ? '' : ' (по умолчанию)'}`;
   const lines = [
     `── M1 ── радужка ${app.iris.irisMm.toFixed(2)} мм (${t.methodNames[app.iris.method]}), FOV ${fovTxt}, режим ${Rimg ? '3D (поза)' : '2D (нет матрицы)'}`,
-    `мм/px: радужка ${sIris.toFixed(4)}${model ? `, модель ${sModel.toFixed(4)} (невязка ${resid.toFixed(1)} px)` : ''}  → Z ${z.toFixed(0)} мм`,
+    `мм/px: радужка ${sIris.toFixed(4)}${model ? `, модель ${sModel.toFixed(4)} (невязка ${resid.toFixed(1)} px)` : ''}  → Z ${z.toFixed(0)} мм (сглажено ${zs.toFixed(0)}, поправка ×${currentDistK(w, h).toFixed(3)}); Z по радужке ${(distanceMm(f, sIris) * currentDistK(w, h)).toFixed(0)} мм`,
     model ? `модель лица: конв. ${model.convention}, разброс ${model.spreadMm.toFixed(2)} мм, кадров ${model.frames}` : 'модель лица: нет',
     g ? `коэффициенты глаз: R ${g.R.h.toFixed(2)} L ${g.L.h.toFixed(2)} (по горизонтали)` : 'коэффициенты глаз: нет (1,00)',
     `угол к носу (1,5 с, ${stR.n}/${stR.total}${ok ? '' : ', НЕВАЛИДНО'}): R ${sg(stR.median)}° (${sg(prismDiopters(stR.median))} ПД)  L ${sg(stL.median)}° (${sg(prismDiopters(stL.median))} ПД)`,
@@ -360,7 +404,8 @@ function processFrame(now: number): void {
   const i = pickFace(res);
   const f0 = focalFromVerticalFov(h, currentFov(w, h));
   if (i < 0) {
-    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, openR: NaN, openL: NaN, angR: NaN, angL: NaN, rawH: { R: NaN, L: NaN }, rawV: { R: NaN, L: NaN }, z: NaN, ipd: NaN, sIris: NaN, f: f0, devInst: NaN, valid: false });
+    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, openR: NaN, openL: NaN, angR: NaN, angL: NaN, rawH: { R: NaN, L: NaN }, rawV: { R: NaN, L: NaN }, z: NaN, zs: NaN, ipd: NaN, sIris: NaN, f: f0, devInst: NaN, valid: false });
+    zBuf.length = 0;
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
     recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '']);
@@ -424,6 +469,7 @@ function processFrame(now: number): void {
 
 // ---- старт ----
 restore();
+void startupCamera();
 state.isDev = devBox.checked;
 $('devPanel').hidden = !state.isDev;
 updateChips();

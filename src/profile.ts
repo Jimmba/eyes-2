@@ -35,11 +35,22 @@ export interface ScreenRec {
   method: 'card' | 'diagonal';
   at: number;
 }
+export interface HistRec {
+  at: number;
+  kind: 'measure' | 'before' | 'after' | 'exercise';
+  direction: 'away' | 'closer';
+  breakCm: number; // медиана дистанции срыва, NaN если срывов не было
+  returnCm: number; // медиана дистанции возврата
+  boundaryCm: number; // середина между срывом и возвратом
+  n: number;
+}
 export interface Stored {
   v: 1;
   iris?: IrisRec;
   model?: ModelRec;
   camera?: Record<string, number>; // поле зрения по вертикали (°): ключ «камера|ширина×высота»
+  distK?: Record<string, number>; // поправка расстояния (множитель) по проверке с линейкой: тот же ключ
+  history?: HistRec[]; // интерим до M4: итоги замеров границы срыва
   gains?: Record<string, GainsRec>; // ключ: камера
   screen?: ScreenRec;
   ack?: number; // время подтверждения предупреждения о противопоказаниях

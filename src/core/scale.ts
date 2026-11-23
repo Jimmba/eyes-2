@@ -45,3 +45,26 @@ export const distanceMm = (focalPx: number, mmPerPx: number): number => focalPx 
 export const fovFromFocal = (heightPx: number, focalPx: number): number => (2 * Math.atan(heightPx / 2 / focalPx) * 180) / Math.PI;
 export const FOV_RANGE_DEG: [number, number] = [40, 100];
 export const isPlausibleFov = (deg: number): boolean => deg >= FOV_RANGE_DEG[0] && deg <= FOV_RANGE_DEG[1];
+
+/**
+ * Вертикальное поле зрения кадра w×h по диагональному полю зрения из паспорта камеры.
+ * Допущение: сенсор 4:3, кадр вырезан из него без масштабирования (обрезка), без электронной стабилизации.
+ * Ориентировочно: у многих телефонов обрезка и стабилизация меняют поле зрения, поэтому точнее мерить линейкой.
+ */
+export function fovVerticalFromDiagonal(diagDeg: number, w: number, h: number): number {
+  const a = w / h;
+  const landscape = a >= 1;
+  const [sw, sh] = landscape ? [4, 3] : [3, 4]; // сенсор в ориентации кадра
+  let W = landscape ? sw : sh * a;
+  let H = landscape ? sw / a : sh;
+  if (W > sw) {
+    W = sw;
+    H = sw / a;
+  }
+  if (H > sh) {
+    H = sh;
+    W = sh * a;
+  }
+  const u = Math.tan((diagDeg * Math.PI) / 360) / 2.5; // тангенс на единицу сенсора (полудиагональ = 2,5)
+  return (2 * Math.atan((H / 2) * u) * 180) / Math.PI;
+}

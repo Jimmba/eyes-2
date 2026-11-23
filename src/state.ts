@@ -2,7 +2,7 @@
 import type { FaceModel, LM } from './core/faceModel';
 import type { M3, V3 } from './core/linalg';
 import { ScaleMethod, ScaleSetup, defaultScale } from './core/scale';
-import { GainsRec, ScreenRec, clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
+import { GainsRec, HistRec, ScreenRec, clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
 
 export interface ZeroRec {
   R: number; // угол правого глаза к носу, °
@@ -33,6 +33,7 @@ export interface FrameInfo {
   rawV: { R: number; L: number }; // вертикальный угол без коэффициента (вверх > 0)
   eyeCam?: { R: V3; L: V3 }; // центры глазных яблок в системе камеры, мм
   z: number;
+  zs: number; // расстояние, сглажено медианой по последним кадрам, мм (его показываем и пишем в результаты)
   ipd: number;
   sIris: number; // мм/px по текущему размеру радужки
   f: number; // фокусное расстояние, px
@@ -53,6 +54,8 @@ export const app = {
   modelAt: 0,
   zero: null as ZeroRec | null,
   cameraFov: {} as Record<string, number>,
+  distK: {} as Record<string, number>,
+  history: [] as HistRec[],
   gains: null as Gains | null,
   gainsAll: {} as Record<string, Gains>,
   screen: null as ScreenCal | null,
@@ -77,6 +80,20 @@ export function setFov(w: number, h: number, deg: number): void {
   app.cameraFov[fovKey(w, h)] = deg;
   persist();
 }
+
+export const currentDistK = (w: number, h: number): number => app.distK[fovKey(w, h)] ?? 1;
+export function setDistK(w: number, h: number, k: number): void {
+  app.distK[fovKey(w, h)] = k;
+  persist();
+}
+export function addHistory(r: HistRec): void {
+  app.history.push(r);
+  if (app.history.length > 200) app.history.splice(0, app.history.length - 200);
+  persist();
+}
+/** Прошлый итог того же вида и направления (для сравнения «было → стало»). */
+export const lastHistory = (kinds: HistRec['kind'][], direction: 'away' | 'closer'): HistRec | undefined =>
+  [...app.history].reverse().find((r) => kinds.includes(r.kind) && r.direction === direction && Number.isFinite(r.boundaryCm));
 
 export function setGains(g: Gains): void {
   app.gains = g;
@@ -105,6 +122,8 @@ export function persist(): void {
     iris: app.irisAt ? { mm: app.iris.irisMm, method: app.iris.method, at: app.irisAt } : undefined,
     model: app.model ? modelToRec(app.model, app.modelIrisMm, app.modelCamera, app.modelAt, app.modelFov) : undefined,
     camera: Object.keys(app.cameraFov).length ? app.cameraFov : undefined,
+    distK: Object.keys(app.distK).length ? app.distK : undefined,
+    history: app.history.length ? app.history : undefined,
     gains: Object.keys(app.gainsAll).length ? app.gainsAll : undefined,
     screen: app.screen ?? undefined,
     ack: app.ack || undefined,
@@ -141,6 +160,8 @@ export function restore(): void {
     app.modelAt = s.model.at;
   }
   app.cameraFov = s.camera ?? {};
+  app.distK = s.distK ?? {};
+  app.history = s.history ?? [];
   app.gainsAll = s.gains ?? {};
   app.screen = s.screen ?? null;
   app.ack = s.ack ?? 0;
@@ -154,6 +175,8 @@ export function resetAll(): void {
   app.modelAt = 0;
   app.zero = null;
   app.cameraFov = {};
+  app.distK = {};
+  app.history = [];
   app.gains = null;
   app.gainsAll = {};
   app.screen = null;

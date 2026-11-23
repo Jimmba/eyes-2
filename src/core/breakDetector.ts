@@ -6,12 +6,13 @@ export interface DetOpts {
   thresholdDeg: number; // T
   breakMs: number; // сколько держится |сигнал| > T
   breakFrames: number; // и не меньше стольких кадров
-  returnMs: number; // сколько держится |сигнал| < T/2
+  returnRatio: number; // порог возврата = T · returnRatio (гистерезис)
+  returnMs: number; // сколько держится |сигнал| < T · returnRatio
   returnFrames: number;
   medianLen: number; // медиана по последним валидным кадрам
   blinkCooldown: number; // кадров после невалидного кадра тоже пропускаем
 }
-export const DET_DEFAULTS: DetOpts = { thresholdDeg: 3, breakMs: 400, breakFrames: 3, returnMs: 800, returnFrames: 4, medianLen: 3, blinkCooldown: 2 };
+export const DET_DEFAULTS: DetOpts = { thresholdDeg: 3, breakMs: 400, breakFrames: 3, returnRatio: 0.6, returnMs: 500, returnFrames: 3, medianLen: 3, blinkCooldown: 2 };
 
 export interface DetSample {
   t: number; // мс
@@ -91,7 +92,7 @@ export class BreakDetector {
       } else this.run = null;
     } else {
       this.peak = Math.max(this.peak, Math.abs(f));
-      if (Math.abs(f) < T / 2) {
+      if (Math.abs(f) < T * this.opts.returnRatio) {
         if (!this.run) this.run = { t: s.t, z: s.z, value: f, count: 1 };
         else this.run.count++;
         if (this.run.count >= this.opts.returnFrames && s.t - this.run.t >= this.opts.returnMs) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Косоглазие: M1.5</title>
+  <title>Косоглазие: M3.1</title>
   <style>
     :root { color-scheme: dark; --bg:#101418; --fg:#e8eaed; --muted:#9aa0a6; --acc:#4dd0e1; --panel:#171c21; --line:#2a333c; }
     * { box-sizing: border-box; }
@@ -62,6 +62,16 @@
     #sheetBody p.why { color:#b9c4cf; font-size:.92rem; }
     #sheetBody p.big { font-size:1.15rem; font-weight:600; }
     #sheetBody p.warn { color:#ffb74d; }
+    #sheetBody p.status { padding:8px 10px; border-radius:8px; background:#1f2933; }
+    #sheetBody p.status.brk { background:#4a2f00; color:#ffd180; }
+    #sheetBody p.status.ok { background:#12351f; color:#9be7b0; }
+    button.markbtn { font-weight:700; padding:14px 18px; }
+    button.markbtn.pressed { background:#ff9800; color:#201000; border-color:#ff9800; }
+    button.markbtn.done { background:#34c759; color:#06210f; border-color:#34c759; }
+    #camModal { position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:3000; display:flex; align-items:center; justify-content:center; padding:16px; }
+    #camModal[hidden] { display:none; }
+    #camModal .box { background:var(--panel); border:1px solid #394552; border-radius:14px; padding:18px; max-width:420px; }
+    #camModal h2 { margin:0 0 8px; font-size:1.2rem; }
     .btnrow { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   </style>
 </head>
@@ -77,6 +87,7 @@
   <button id="miCalib"></button>
   <button id="miMeasure"></button>
   <button id="miTrain"></button>
+  <button id="miDist"></button>
   <button id="miCsv"></button>
   <button id="miReset"></button>
   <details>
@@ -102,7 +113,7 @@
       <video id="video" playsinline muted></video>
       <canvas id="view"></canvas>
       <div id="timer" hidden></div>
-      <button id="start" class="primary"></button>
+      <button id="start" class="primary" hidden></button>
     </div>
     <div id="status"></div>
   </section>
@@ -117,6 +128,15 @@
 
   <p class="note" id="disclaimer"></p>
 </main>
+
+<div id="camModal" hidden>
+  <div class="box">
+    <h2 id="camTitle"></h2>
+    <p id="camText"></p>
+    <p id="camErr" class="note"></p>
+    <div class="btnrow"><button id="camOk" class="primary"></button><button id="camLater"></button></div>
+  </div>
+</div>
 
 <div id="stim" hidden>
   <div id="stimMsg"></div>

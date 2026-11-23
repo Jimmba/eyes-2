@@ -110,7 +110,7 @@ export async function runCalibration(env: Env): Promise<void> {
           }
           const good = Number.isFinite(mm) && isPlausibleIris(mm) && warn !== 'corners';
           const nodes: Node[] = [];
-          if (Number.isFinite(mm)) nodes.push(h('p', { class: 'big' }, `${t.s1Result}: ${mm.toFixed(2)} мм`));
+          if (Number.isFinite(mm)) nodes.push(h('p', { class: 'big' }, `${t.s1Result}: ${mm.toFixed(2)} мм`), p(t.s1CardDepth, 'why'));
           if (warn === 'corners') nodes.push(p(t.s1CardCorners, 'warn'));
           else if (Number.isFinite(mm) && !isPlausibleIris(mm)) nodes.push(p(t.s1CardBad, 'warn'));
           if (warn === 'tilt') nodes.push(p(t.s1CardTilt, 'warn'));
