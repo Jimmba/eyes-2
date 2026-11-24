@@ -2,7 +2,7 @@
 // Экран во всю страницу: мишень у верхнего края (рядом с камерой), крупная команда, шкала расстояния.
 // Срыв и возврат находит камера; если не заметила, касание экрана в любом месте или пробел.
 import type { Env } from './calibration';
-import { BreakDetector, DET_DEFAULTS } from './core/breakDetector';
+import { WIN_DEFAULTS, WindowDetector } from './core/windowDetector';
 import { median } from './core/filters';
 import { letterHeightMm } from './core/scale';
 import { HOLD_DEFAULTS, HoldController, HoldStop } from './core/hold';
@@ -101,7 +101,7 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
   if (a === 'skip') return 'skip';
 
   const ctrl = new HoldController({ dir, breakCm: init.breakCm, returnCm: init.returnCm, ...HOLD_DEFAULTS });
-  const det = new BreakDetector({ ...DET_DEFAULTS, thresholdDeg: Math.max(DET_DEFAULTS.thresholdDeg, 3 * (app.zero?.sigma ?? 0)) });
+  const det = new WindowDetector(WIN_DEFAULTS); // окно ~1 с против собственной базы (ноль для порога не нужен)
 
   // ---- разметка экрана ----
   const target = h('div', { class: 'exTarget' });
@@ -143,7 +143,8 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
       const ok = i.face && i.valid && Number.isFinite(i.zq);
       if (ok) lastValid = now;
       if (!live) return;
-      const e = det.push({ t: now, value: i.devInst, valid: ok && Number.isFinite(i.devInst), z: i.zs });
+      const e = det.push({ t: now, value: i.devInst, valid: ok && Math.min(i.openR, i.openL) > 0.25 && Number.isFinite(i.devInst), z: i.zs });
+      app.annot.det = det.state === 'broken' ? 1 : 0;
       if (!e) return;
       if (e.type === 'break') {
         if (ctrl.onBreak(e.z / 10, now, 'camera')) app.pendingEvent = 'hold_break';
@@ -160,12 +161,11 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
     const now = performance.now();
     if (ctrl.phase === 'recover') {
       if (ctrl.onReturn(curCm(), now, 'tap')) {
-        det.reset();
+        det.forceFused(now);
         app.pendingEvent = 'hold_return_tap';
       }
     } else if (ctrl.phase !== 'done' && ctrl.onBreak(curCm(), now, 'tap')) {
-      det.reset();
-      det.state = 'broken'; // чтобы камера увидела возврат
+      det.forceBroken(); // чтобы камера увидела возврат
       app.pendingEvent = 'hold_break_tap';
     }
   });
@@ -213,6 +213,7 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
   } finally {
     stopSink();
     stopTap();
+    app.annot.det = 0;
     env.recorder.scene = null;
     sheet.head(true);
   }

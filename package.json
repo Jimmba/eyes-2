@@ -2,7 +2,7 @@
   "name": "strabismus-trainer",
   "version": "0.0.1",
   "private": true,
-  "description": "M3.3: ноль отдельным пунктом, удержание касания для срыва, страницы без всплывающего окна",
+  "description": "M3.4: детектор срыва по окну, проверка нуля по ошибке, поправка на реакцию",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

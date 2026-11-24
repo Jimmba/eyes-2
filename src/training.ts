@@ -1,6 +1,7 @@
 // M3: ядро цикла. Замер «срыв при отдалении» (3 попытки), упражнение 1 (5 попыток), сессия: замер «до» → упражнение → замер «после».
 import { Env, runCalibration } from './calibration';
-import { BreakDetector, DET_DEFAULTS, DetEvent } from './core/breakDetector';
+import type { DetEvent } from './core/breakDetector';
+import { WIN_DEFAULTS, WindowDetector } from './core/windowDetector';
 import { median } from './core/filters';
 import { t } from './i18n';
 import { FrameInfo, addHistory, app, lastHistory, persist, zeroValid } from './state';
@@ -21,7 +22,9 @@ interface Attempt {
   camBreakCm: number;
   camReturnCm: number;
   markBreakCm: number;
+  markBreakRawCm: number; // дистанция в момент нажатия, без поправки
   markReturnCm: number;
+  lagSec: number; // на сколько секунд ваше нажатие позже срыва по камере
   holds: number; // сколько раз вы нажимали (держали касание)
   holdSec: number; // сколько держали в первый раз
   angle: number; // вергенция в момент срыва по камере, °
@@ -48,12 +51,14 @@ function worsened(d: number[], direction: 'away' | 'closer'): boolean {
   return direction === 'away' ? last < 0.7 * base : last > 1.3 * base;
 }
 
+/** Задержка человека: от срыва до нажатия (по журналу 24.11 ≈ 1,3-1,9 с). */
+const REACTION_LAG_MS = 1500;
 const HOLD_GRACE_MS = 2500; // после отпускания ждём ещё: вдруг срыв вернулся
 
 async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string): Promise<Attempt | 'cancel'> {
-  const threshold = Math.max(DET_DEFAULTS.thresholdDeg, 3 * (app.zero?.sigma ?? 0)); // порог: не меньше 3° и 3σ шума в покое
-  const det = new BreakDetector({ ...DET_DEFAULTS, thresholdDeg: threshold });
+  const det = new WindowDetector(WIN_DEFAULTS); // окно ~1 с против базы попытки; ноль для порога не нужен
   let camBrk: DetEvent | null = null;
+  let camBrkWall = 0; // когда камера подтвердила срыв (мс performance.now), для сравнения с нажатием
   let camRet: DetEvent | null = null;
   // Ваша отметка: касание экрана (или пробел) держится, пока есть срыв. Нажатие = срыв, отпускание = возврат.
   interface Seg {
@@ -69,17 +74,29 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   let ended = false;
   let recording = false; // касания и события камеры до старта записи (обратный отсчёт) не считаются
   let maxZ = 0;
+  const zHist: { t: number; z: number }[] = []; // дистанция по времени: чтобы пересчитать нажатие на момент, когда срыв был на самом деле
+  const zAt = (t: number): number => {
+    for (let k = zHist.length - 1; k >= 0; k--) if (zHist[k].t <= t) return zHist[k].z;
+    return zHist.length ? zHist[0].z : NaN;
+  };
   const curZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zs) ? app.lastInfo.zs : NaN);
   const fastZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zq) ? app.lastInfo.zq : curZ());
   const stop = collect((i) => {
     if (!recording) return;
-    if (Number.isFinite(i.zs)) maxZ = Math.max(maxZ, i.zs);
-    const e = det.push({ t: i.t, value: i.devInst, valid: i.face && i.valid && Number.isFinite(i.devInst), z: i.zs });
+    const now = performance.now();
+    if (Number.isFinite(i.zs)) {
+      maxZ = Math.max(maxZ, i.zs);
+      zHist.push({ t: now, z: Number.isFinite(i.zq) ? i.zq : i.zs });
+      if (zHist.length > 120) zHist.shift();
+    }
+    const open = Math.min(i.openR, i.openL);
+    const e = det.push({ t: now, value: i.devInst, valid: i.face && i.valid && open > 0.25 && Number.isFinite(i.devInst), z: i.zs });
     app.annot.det = det.state === 'broken' ? 1 : 0; // для журнала: что думает камера
     if (!e) return;
     if (e.type === 'break' && !camBrk) {
       camBrk = e;
-      if (!breakWall) breakWall = performance.now();
+      camBrkWall = now;
+      if (!breakWall) breakWall = now;
       app.pendingEvent = 'break';
     } else if (e.type === 'return' && camBrk && !camRet) {
       camRet = e;
@@ -99,6 +116,7 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     sg0.z1 = fastZ();
     sg0.t1 = performance.now();
     lastRelease = sg0.t1;
+    det.forceFused(sg0.t1);
     app.annot.user = 0;
     app.pendingEvent = 'hold_end';
   };
@@ -129,6 +147,7 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
       if (!recording || pressed) return;
       pressed = true;
       segs.push({ z0: fastZ(), z1: NaN, t0: performance.now(), t1: NaN });
+      if (camBrk === null) det.forceBroken();
       app.annot.user = 1;
       if (!breakWall) breakWall = performance.now();
       app.pendingEvent = 'hold_start';
@@ -169,10 +188,14 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   const first = segs[0];
   const camBreakCm = b ? cm(b.z) : NaN;
   const camReturnCm = q ? cm(q.z) : NaN;
-  const markBreakCm = first ? cm(first.z0) : NaN;
+  const markBreakRawCm = first ? cm(first.z0) : NaN;
   const markReturnCm = first ? cm(first.z1) : NaN;
-  // что принять за срыв: ваша отметка надёжнее камеры (камера пока отлаживается), а если вы не отмечали, берём камеру
-  const breakCm = Number.isFinite(markBreakCm) ? markBreakCm : camBreakCm;
+  // Нажатие всегда позже настоящего срыва: человек замечает его с задержкой. Пересчитываем на момент за REACTION_LAG_MS до нажатия.
+  const zBefore = first ? zAt(first.t0 - REACTION_LAG_MS) : NaN;
+  const markBreakCm = Number.isFinite(zBefore) ? cm(zBefore) : markBreakRawCm;
+  const lagSec = first && b ? (first.t0 - b.onsetT) / 1000 : NaN;
+  // что принять за срыв: камера, если нашла; иначе ваше нажатие с поправкой на реакцию. Возврат: ваше отпускание (оно совпадало с камерой), иначе камера.
+  const breakCm = Number.isFinite(camBreakCm) ? camBreakCm : markBreakCm;
   const returnCm = Number.isFinite(markReturnCm) ? markReturnCm : camReturnCm;
   return {
     broke: Number.isFinite(breakCm),
@@ -181,7 +204,9 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     camBreakCm,
     camReturnCm,
     markBreakCm,
+    markBreakRawCm,
     markReturnCm,
+    lagSec,
     holds: segs.length,
     holdSec: first && Number.isFinite(first.t1) ? (first.t1 - first.t0) / 1000 : NaN,
     angle: b ? b.value : NaN,
@@ -221,9 +246,9 @@ async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeSc
     if (r.broke) {
       nodes.push(h('p', { class: 'big' }, `${t.trBreakAt}: ${fmt(r.breakCm)}${Number.isFinite(r.angle) ? ` (${sg(r.angle)}°)` : ''}`));
       nodes.push(p(Number.isFinite(r.returnCm) ? `${t.trReturnAt}: ${fmt(r.returnCm)}. ${t.trBoundary}: ${fmt(Math.min(r.breakCm, r.returnCm))}–${fmt(Math.max(r.breakCm, r.returnCm))}.` : t.trNoReturn));
-      if (Number.isFinite(r.markBreakCm) && !Number.isFinite(r.camBreakCm)) nodes.push(p(t.trCamMissed, 'warn'));
-      else if (!Number.isFinite(r.markBreakCm)) nodes.push(p(t.trYouNoMark, 'why'));
-      else if (Math.abs(r.camBreakCm - r.markBreakCm) > 5) nodes.push(p(`${t.trSrcDiff}: камера ${fmt(r.camBreakCm)}, ваша отметка ${fmt(r.markBreakCm)}.`, 'why'));
+      if (Number.isFinite(r.markBreakRawCm) && !Number.isFinite(r.camBreakCm)) nodes.push(p(`${t.trCamMissed} ${t.trLagUsed}: ${fmt(r.markBreakRawCm)} → ${fmt(r.markBreakCm)}.`, 'warn'));
+      else if (!Number.isFinite(r.markBreakRawCm)) nodes.push(p(t.trYouNoMark, 'why'));
+      else nodes.push(p(`${t.trCamVsYou}: камера ${fmt(r.camBreakCm)}, вы нажали на ${fmt(r.markBreakRawCm)}${Number.isFinite(r.lagSec) ? `, то есть через ${r.lagSec.toFixed(1)} с после срыва` : ''}.`, 'why'));
       if (r.holds > 0 && Number.isFinite(r.holdSec)) nodes.push(p(`${t.trHeld}: ${r.holdSec.toFixed(1)} с${r.holds > 1 ? `, нажатий ${r.holds}` : ''}.`, 'why'));
     } else nodes.push(h('p', { class: 'big' }, `${t.trNoBreak} ${r.maxCm.toFixed(0)} см`));
     const dists = out.map((x) => (x.broke ? x.breakCm : NaN));

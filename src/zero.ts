@@ -2,8 +2,8 @@
 // это отдельный пункт меню, а не шаг калибровки. Шаг можно вызвать и изнутри замера или тренировки: после него
 // пользователь возвращается на тот же экран.
 import type { Env } from './calibration';
-import { DET_DEFAULTS, thresholdFromNoise } from './core/breakDetector';
-import { std, windowStat } from './core/filters';
+import { median, windowStat } from './core/filters';
+import { windowNoise } from './core/windowDetector';
 import { t } from './i18n';
 import { FrameInfo, app, zeroValid } from './state';
 import { Cancel, h, sheet, timedCapture } from './ui';
@@ -43,7 +43,7 @@ export async function runZeroStep(c: Ctx, title: string, opts: { force?: boolean
       if (i.face) S.push(i);
     };
     app.sinks.add(sink);
-    const ok = await timedCapture({ prep: 3, duration: 6, cancel, onStart: () => (env.recorder.scene = 'zero'), onEnd: () => (env.recorder.scene = null) });
+    const ok = await timedCapture({ prep: 3, duration: 8, cancel, onStart: () => (env.recorder.scene = 'zero'), onEnd: () => (env.recorder.scene = null) });
     app.sinks.delete(sink);
     if (!ok) return false;
     const open = S.map((s) => s.open);
@@ -60,13 +60,23 @@ export async function runZeroStep(c: Ctx, title: string, opts: { force?: boolean
       h('p', { class: 'big' }, `${t.s3Result}: правый ${sg(stR.median)}°, левый ${sg(stL.median)}°`),
       p(`${t.dist} ${(stZ.median / 10).toFixed(0)} см, надёжных кадров ${stR.n} из ${stR.total}.`),
     ];
-    if (std(S.map((s) => s.angR)) > 1.5 || std(S.map((s) => s.angL)) > 1.5 || stR.std > 1.5 || stL.std > 1.5) nodes.push(p(t.s3Unstable, 'warn'));
+    // Шум одного кадра у камеры ±3-5° (так устроены метки радужки), поэтому «разброс < 1,5°» недостижим. Важны две вещи:
+    // ошибка самого нуля (шум / √n) и сдвиг за время записи (первая и вторая половины).
+    const good = S.filter((s) => s.open > 0.25 && Number.isFinite(s.angR + s.angL));
+    const sum = good.map((s) => s.angR + s.angL);
+    const med0 = median(sum);
+    const noise = 1.4826 * median(sum.map((v) => Math.abs(v - med0))); // устойчивая оценка шума кадра
+    const se = (1.25 * noise) / Math.sqrt(Math.max(1, sum.length));
+    const half = Math.floor(sum.length / 2);
+    const drift = half >= 5 ? Math.abs(median(sum.slice(0, half)) - median(sum.slice(half))) : NaN;
+    nodes.push(p(`${t.s3Noise}: ±${noise.toFixed(1)}°; ${t.s3Err}: ±${se.toFixed(1)}°.`, 'why'));
+    if (se > 1.2 || drift > 4) nodes.push(p(t.s3Unstable, 'warn'));
     if (stZ.median < 250 || stZ.median > 700) nodes.push(p(t.s3Dist, 'warn'));
     const k = await screen(title, nodes, [{ key: 'save', label: t.next, primary: true }, { key: 'redo', label: t.redo }]);
     if (k === 'cancel') return false;
     if (k === 'save') {
-      const noise = thresholdFromNoise(S.map((x) => x.angR + x.angL), DET_DEFAULTS);
-      app.zero = { R: stR.median, L: stL.median, z: stZ.median, ipd: stI.median, irisMm: app.iris.irisMm, sigma: noise.sigma, at: Date.now() };
+      const sigma = windowNoise(S.map((x) => x.t), S.map((x) => x.angR + x.angL));
+      app.zero = { R: stR.median, L: stL.median, z: stZ.median, ipd: stI.median, irisMm: app.iris.irisMm, sigma: Number.isFinite(sigma) ? sigma : 0, at: Date.now() };
       env.refresh();
       return true;
     }
