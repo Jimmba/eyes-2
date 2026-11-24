@@ -66,6 +66,8 @@ export const app = {
   cameraKey: '',
   lastInfo: null as FrameInfo | null,
   pendingEvent: '',
+  /** Пометки для журнала CSV: user = 1, пока пользователь держит касание (есть срыв); det = 1, пока детектор камеры считает, что срыв. */
+  annot: { user: 0, det: 0 },
   sinks: new Set<(i: FrameInfo) => void>(),
 };
 

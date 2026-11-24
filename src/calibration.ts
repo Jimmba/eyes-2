@@ -42,7 +42,7 @@ export async function runCalibration(env: Env): Promise<void> {
     cancel.cancel();
     env.marker.stop();
     env.recorder.scene = null;
-  });
+  }, { preview: true, section: t.menuCalib });
   env.recorder.clear(); // каждая новая калибровка пишется с нуля
 
   const screen = (title: string, nodes: (Node | null | false)[], btns: Btn[]): Promise<string> =>
@@ -246,63 +246,11 @@ export async function runCalibration(env: Env): Promise<void> {
     }
   }
 
-  // ---------------- шаг 3: ноль ----------------
-  const title3 = t.wizardStep(4, t.s3Name);
-  async function stepZero(): Promise<boolean> {
-    if (zeroValid() && app.zero) {
-      const z = app.zero;
-      const a = await screen(
-        title3,
-        [why(t.s3Why), p(`${t.s3Saved} (${fmtTime(z.at)}): правый ${sg(z.R)}°, левый ${sg(z.L)}°, ${t.dist} ${(z.z / 10).toFixed(0)} см.`, 'big')],
-        [{ key: 'skip', label: t.skip, primary: true }, { key: 'redo', label: t.redo }],
-      );
-      if (a === 'cancel') return false;
-      if (a === 'skip') return true;
-    }
-    for (;;) {
-      const a = await screen(title3, [why(t.s3Why), p(t.s3How)], [{ key: 'go', label: t.start2, primary: true }]);
-      if (a === 'cancel') return false;
-      info(title3, p(t.s3Wait, 'big'));
-      const S: { angR: number; angL: number; open: number; z: number; ipd: number }[] = [];
-      const stop = collect((i) => {
-        if (i.face) S.push(i);
-      });
-      const ok = await timedCapture({ prep: 3, duration: 6, cancel, onStart: () => (env.recorder.scene = 'zero'), onEnd: () => (env.recorder.scene = null) });
-      stop();
-      if (!ok) return false;
-      const open = S.map((s) => s.open);
-      const stR = windowStat(S.map((s) => s.angR), open, 8);
-      const stL = windowStat(S.map((s) => s.angL), open, 8);
-      const stZ = windowStat(S.map((s) => s.z), open, 8);
-      const stI = windowStat(S.map((s) => s.ipd), open, 8);
-      if (!(stR.ok && stL.ok && stZ.ok)) {
-        const r = await screen(title3, [p(t.s3Few, 'warn')], [{ key: 'retry', label: t.redo, primary: true }]);
-        if (r === 'cancel') return false;
-        continue;
-      }
-      const nodes: Node[] = [
-        h('p', { class: 'big' }, `${t.s3Result}: правый ${sg(stR.median)}°, левый ${sg(stL.median)}°`),
-        p(`${t.dist} ${(stZ.median / 10).toFixed(0)} см, надёжных кадров ${stR.n} из ${stR.total}.`),
-      ];
-      if (std(S.map((s) => s.angR)) > 1.5 || std(S.map((s) => s.angL)) > 1.5 || stR.std > 1.5 || stL.std > 1.5) nodes.push(p(t.s3Unstable, 'warn'));
-      if (stZ.median < 250 || stZ.median > 700) nodes.push(p(t.s3Dist, 'warn'));
-      const c = await screen(title3, nodes, [{ key: 'save', label: t.next, primary: true }, { key: 'redo', label: t.redo }]);
-      if (c === 'cancel') return false;
-      if (c === 'save') {
-        const noise = thresholdFromNoise(S.map((x) => x.angR + x.angL), DET_DEFAULTS);
-        app.zero = { R: stR.median, L: stL.median, z: stZ.median, ipd: stI.median, irisMm: app.iris.irisMm, sigma: noise.sigma, at: Date.now() };
-        env.refresh();
-        return true;
-      }
-    }
-  }
-
   const ctx = { env, cancel, screen };
   if (!(await stepIris())) return;
   if (!(await stepDistance(ctx, t.wizardStep(2, t.distName)))) return; // до модели: поле зрения нужно для её построения
   if (!(await stepModel())) return;
-  if (!(await stepZero())) return;
-  if (!(await stepRefine(ctx, t.wizardStep(5, t.rfName)))) return;
+  if (!(await stepRefine(ctx, t.wizardStep(4, t.rfName)))) return;
 
   for (;;) {
     const a = await screen(t.doneTitle, [p(t.doneText)], [{ key: 'close', label: t.close, primary: true }, { key: 'csv', label: t.menuCsv }]);

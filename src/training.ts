@@ -1,13 +1,14 @@
 // M3: ядро цикла. Замер «срыв при отдалении» (3 попытки), упражнение 1 (5 попыток), сессия: замер «до» → упражнение → замер «после».
-import type { Env } from './calibration';
+import { Env, runCalibration } from './calibration';
 import { BreakDetector, DET_DEFAULTS, DetEvent } from './core/breakDetector';
 import { median } from './core/filters';
 import { t } from './i18n';
 import { FrameInfo, addHistory, app, lastHistory, persist, zeroValid } from './state';
 import type { HistRec } from './profile';
-import { Cancel, captureUntil, h, onTap, sheet } from './ui';
+import { Cancel, captureUntil, h, onHold, sheet } from './ui';
 import { HoldInit, holdSummary, runHold } from './exercise';
 import { fmtDate, makeScreen, p, sg } from './wizard';
+import { ZERO_FRESH_H, runZeroStep, zeroAgeH } from './zero';
 
 const MAX_ATTEMPT_SEC = 60;
 const RETURN_WAIT_MS = 20000; // после срыва ждём возврат не дольше
@@ -21,6 +22,8 @@ interface Attempt {
   camReturnCm: number;
   markBreakCm: number;
   markReturnCm: number;
+  holds: number; // сколько раз вы нажимали (держали касание)
+  holdSec: number; // сколько держали в первый раз
   angle: number; // вергенция в момент срыва по камере, °
   maxCm: number;
   boundaryCm: number; // середина между срывом и возвратом (если возврата нет, равна срыву)
@@ -45,22 +48,34 @@ function worsened(d: number[], direction: 'away' | 'closer'): boolean {
   return direction === 'away' ? last < 0.7 * base : last > 1.3 * base;
 }
 
+const HOLD_GRACE_MS = 2500; // после отпускания ждём ещё: вдруг срыв вернулся
+
 async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string): Promise<Attempt | 'cancel'> {
   const threshold = Math.max(DET_DEFAULTS.thresholdDeg, 3 * (app.zero?.sigma ?? 0)); // порог: не меньше 3° и 3σ шума в покое
   const det = new BreakDetector({ ...DET_DEFAULTS, thresholdDeg: threshold });
   let camBrk: DetEvent | null = null;
   let camRet: DetEvent | null = null;
-  let markBreak = NaN; // мм
-  let markReturn = NaN;
+  // Ваша отметка: касание экрана (или пробел) держится, пока есть срыв. Нажатие = срыв, отпускание = возврат.
+  interface Seg {
+    z0: number; // мм в момент нажатия
+    z1: number; // мм в момент отпускания
+    t0: number;
+    t1: number;
+  }
+  const segs: Seg[] = [];
+  let pressed = false;
+  let lastRelease = 0;
   let breakWall = 0;
   let ended = false;
   let recording = false; // касания и события камеры до старта записи (обратный отсчёт) не считаются
   let maxZ = 0;
   const curZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zs) ? app.lastInfo.zs : NaN);
+  const fastZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zq) ? app.lastInfo.zq : curZ());
   const stop = collect((i) => {
     if (!recording) return;
     if (Number.isFinite(i.zs)) maxZ = Math.max(maxZ, i.zs);
     const e = det.push({ t: i.t, value: i.devInst, valid: i.face && i.valid && Number.isFinite(i.devInst), z: i.zs });
+    app.annot.det = det.state === 'broken' ? 1 : 0; // для журнала: что думает камера
     if (!e) return;
     if (e.type === 'break' && !camBrk) {
       camBrk = e;
@@ -72,78 +87,93 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     }
   });
 
-  // --- экран попытки: живое расстояние, состояние и кнопка, которая меняется по ходу ---
+  // --- экран попытки: живое расстояние, состояние и площадка касания ---
   const live = h('p', { class: 'big' }, '…');
   const status = h('p', { class: 'status' }, t.trStateWait);
-  const btn = h('div', { class: 'markpad' }, t.trMark, h('small', null, t.trTapHint));
+  const pad = h('div', { class: 'markpad' }, t.trMark, h('small', null, t.trTapHint));
   const endBtn = h('button', {}, t.trEndAttempt);
-  const phase = (): 'fused' | 'broken' | 'done' => {
-    const hasBreak = !!camBrk || Number.isFinite(markBreak);
-    const hasReturn = !!camRet || Number.isFinite(markReturn);
-    return !hasBreak ? 'fused' : hasReturn ? 'done' : 'broken';
+  const closeSeg = () => {
+    const sg0 = segs[segs.length - 1];
+    if (!pressed || !sg0) return;
+    pressed = false;
+    sg0.z1 = fastZ();
+    sg0.t1 = performance.now();
+    lastRelease = sg0.t1;
+    app.annot.user = 0;
+    app.pendingEvent = 'hold_end';
   };
   const paint = () => {
     const z = curZ();
     live.textContent = Number.isFinite(z) ? `${t.dist}: ${cm(z).toFixed(0)} см` : t.noFaceShort;
-    const ph = phase();
-    const bc = camBrk ? cm((camBrk as DetEvent).z) : Number.isFinite(markBreak) ? cm(markBreak) : NaN;
-    const rc = camRet ? cm((camRet as DetEvent).z) : Number.isFinite(markReturn) ? cm(markReturn) : NaN;
-    if (ph === 'fused') {
-      status.textContent = t.trStateWait;
-      status.className = 'status';
-      btn.replaceChildren(t.trMark, h('small', null, t.trTapHint));
-      btn.className = 'markpad';
-    } else if (ph === 'broken') {
-      status.textContent = `${t.trStateBroken}: ${fmt(bc)}${camBrk ? ` (${t.trSrcCam})` : ` (${t.trSrcMark})`}. ${t.trStateReturnHint}`;
+    const first = segs[0];
+    const bc = camBrk ? cm((camBrk as DetEvent).z) : first ? cm(first.z0) : NaN;
+    if (pressed) {
+      status.textContent = `${t.trStateBroken}: ${fmt(bc)}. ${t.trHoldNow}`;
       status.className = 'status brk';
-      btn.replaceChildren(t.trMarkReturn, h('small', null, t.trTapHint));
-      btn.className = 'markpad pressed';
-    } else {
-      status.textContent = `${t.trStateBroken}: ${fmt(bc)} → ${t.trStateReturned}: ${fmt(rc)}`;
+      pad.replaceChildren(t.trHolding, h('small', null, t.trReleaseHint));
+      pad.className = 'markpad pressed';
+    } else if (first && Number.isFinite(first.z1)) {
+      status.textContent = `${t.trStateBroken}: ${fmt(cm(first.z0))} → ${t.trStateReturned}: ${fmt(cm(first.z1))}${segs.length > 1 ? ` (${t.trHoldsMore} ${segs.length - 1})` : ''}`;
       status.className = 'status ok';
-      btn.replaceChildren(t.trMarkDone);
-      btn.className = 'markpad done';
+      pad.replaceChildren(t.trMarkDone, h('small', null, t.trAgainHint));
+      pad.className = 'markpad done';
+    } else {
+      status.textContent = camBrk ? `${t.trCamSees}: ${fmt(bc)}. ${t.trCamSeesHint}` : t.trStateWait;
+      status.className = camBrk ? 'status brk' : 'status';
+      pad.replaceChildren(t.trMark, h('small', null, t.trTapHint));
+      pad.className = 'markpad';
     }
   };
-  const stopTap = onTap(() => {
-    if (!recording) return;
-    const z = Number.isFinite(app.lastInfo?.zq ?? NaN) ? (app.lastInfo as { zq: number }).zq : curZ();
-    const ph = phase();
-    if (ph === 'fused') {
-      markBreak = z;
+  const stopHold = onHold(
+    () => {
+      if (!recording || pressed) return;
+      pressed = true;
+      segs.push({ z0: fastZ(), z1: NaN, t0: performance.now(), t1: NaN });
+      app.annot.user = 1;
       if (!breakWall) breakWall = performance.now();
-      app.pendingEvent = 'mark_break';
-    } else if (ph === 'broken') {
-      markReturn = z;
-      app.pendingEvent = 'mark_return';
-    }
-    paint();
-  });
+      app.pendingEvent = 'hold_start';
+      paint();
+    },
+    () => {
+      closeSeg();
+      paint();
+    },
+  );
   endBtn.addEventListener('click', () => (ended = true));
-  const timer = setInterval(paint, 200);
-  sheet.set(title, p(app.direction === 'away' ? t.trWaitAway : t.trWaitCloser, 'big'), live, status, btn, h('div', { class: 'btnrow' }, endBtn));
+  const timer = setInterval(paint, 150);
+  sheet.set(title, p(app.direction === 'away' ? t.trWaitAway : t.trWaitCloser, 'big'), live, status, pad, h('div', { class: 'btnrow' }, endBtn));
   paint();
   env.recorder.scene = scene;
   const r = await captureUntil({
     prep: 3,
     maxSec: MAX_ATTEMPT_SEC,
     cancel,
-    isDone: () => ended || phase() === 'done' || (breakWall > 0 && performance.now() - breakWall > RETURN_WAIT_MS),
+    isDone: () => {
+      if (ended || pressed) return ended;
+      const now = performance.now();
+      if (segs.length > 0) return now - lastRelease > HOLD_GRACE_MS; // вы отпустили и 2,5 с ничего не менялось
+      return (!!camBrk && !!camRet) || (breakWall > 0 && now - breakWall > RETURN_WAIT_MS);
+    },
     onStart: () => (recording = true),
     onEnd: () => (env.recorder.scene = null),
   });
   clearInterval(timer);
   stop();
-  stopTap();
+  closeSeg(); // вдруг попытку закончили, пока касание ещё держалось
+  stopHold();
+  app.annot.user = 0;
+  app.annot.det = 0;
   if (r === 'cancel') return 'cancel';
   const b = camBrk as DetEvent | null;
   const q = camRet as DetEvent | null;
+  const first = segs[0];
   const camBreakCm = b ? cm(b.z) : NaN;
   const camReturnCm = q ? cm(q.z) : NaN;
-  const markBreakCm = cm(markBreak);
-  const markReturnCm = cm(markReturn);
-  const breakCm = Number.isFinite(camBreakCm) ? camBreakCm : markBreakCm;
-  const returnCm = Number.isFinite(camReturnCm) ? camReturnCm : markReturnCm;
+  const markBreakCm = first ? cm(first.z0) : NaN;
+  const markReturnCm = first ? cm(first.z1) : NaN;
+  // что принять за срыв: ваша отметка надёжнее камеры (камера пока отлаживается), а если вы не отмечали, берём камеру
+  const breakCm = Number.isFinite(markBreakCm) ? markBreakCm : camBreakCm;
+  const returnCm = Number.isFinite(markReturnCm) ? markReturnCm : camReturnCm;
   return {
     broke: Number.isFinite(breakCm),
     breakCm,
@@ -152,6 +182,8 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     camReturnCm,
     markBreakCm,
     markReturnCm,
+    holds: segs.length,
+    holdSec: first && Number.isFinite(first.t1) ? (first.t1 - first.t0) / 1000 : NaN,
     angle: b ? b.value : NaN,
     maxCm: cm(maxZ),
     boundaryCm: Number.isFinite(breakCm) ? (Number.isFinite(returnCm) ? (breakCm + returnCm) / 2 : breakCm) : NaN,
@@ -187,9 +219,12 @@ async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeSc
     out.push(r);
     const nodes: Node[] = [];
     if (r.broke) {
-      nodes.push(h('p', { class: 'big' }, `${t.trBreakAt}: ${fmt(r.breakCm)} (${Number.isFinite(r.angle) ? sg(r.angle) + '°' : t.trSrcMark})`));
+      nodes.push(h('p', { class: 'big' }, `${t.trBreakAt}: ${fmt(r.breakCm)}${Number.isFinite(r.angle) ? ` (${sg(r.angle)}°)` : ''}`));
       nodes.push(p(Number.isFinite(r.returnCm) ? `${t.trReturnAt}: ${fmt(r.returnCm)}. ${t.trBoundary}: ${fmt(Math.min(r.breakCm, r.returnCm))}–${fmt(Math.max(r.breakCm, r.returnCm))}.` : t.trNoReturn));
-      if (Number.isFinite(r.camBreakCm) && Number.isFinite(r.markBreakCm) && Math.abs(r.camBreakCm - r.markBreakCm) > 5) nodes.push(p(`${t.trSrcDiff}: камера ${fmt(r.camBreakCm)}, ваша отметка ${fmt(r.markBreakCm)}.`, 'why'));
+      if (Number.isFinite(r.markBreakCm) && !Number.isFinite(r.camBreakCm)) nodes.push(p(t.trCamMissed, 'warn'));
+      else if (!Number.isFinite(r.markBreakCm)) nodes.push(p(t.trYouNoMark, 'why'));
+      else if (Math.abs(r.camBreakCm - r.markBreakCm) > 5) nodes.push(p(`${t.trSrcDiff}: камера ${fmt(r.camBreakCm)}, ваша отметка ${fmt(r.markBreakCm)}.`, 'why'));
+      if (r.holds > 0 && Number.isFinite(r.holdSec)) nodes.push(p(`${t.trHeld}: ${r.holdSec.toFixed(1)} с${r.holds > 1 ? `, нажатий ${r.holds}` : ''}.`, 'why'));
     } else nodes.push(h('p', { class: 'big' }, `${t.trNoBreak} ${r.maxCm.toFixed(0)} см`));
     const dists = out.map((x) => (x.broke ? x.breakCm : NaN));
     if (worsened(dists, app.direction)) nodes.push(p(t.trDropped, 'warn'));
@@ -202,15 +237,37 @@ async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeSc
   return out;
 }
 
+/** Нужен ли ноль: нет совсем (обязательно) или устарел (предлагаем). Кнопка ведёт к нулю и возвращает на этот же экран. */
+async function ensureZero(env: Env, cancel: Cancel, screen: ReturnType<typeof makeScreen>): Promise<boolean> {
+  for (;;) {
+    const valid = zeroValid() && !!app.zero;
+    const age = valid ? zeroAgeH() : Infinity;
+    if (valid && age <= ZERO_FRESH_H) return true;
+    const a = await screen(
+      t.zeroName,
+      [p(valid ? t.zeroStale(age) : t.zeroMissing, 'warn')],
+      [{ key: 'zero', label: t.zeroDo, primary: true }, ...(valid ? [{ key: 'keep', label: t.zeroKeep }] : []), { key: 'close', label: t.close }],
+    );
+    if (a === 'cancel' || a === 'close') return false;
+    if (a === 'keep') return true;
+    if (!(await runZeroStep({ env, cancel, screen }, t.zeroName, { force: true }))) return false;
+  }
+}
+
 async function preflight(env: Env, cancel: Cancel, screen: ReturnType<typeof makeScreen>): Promise<boolean> {
   if (!(await env.ensureCamera())) {
     sheet.set(t.menuTrain, p(t.needCamera));
     return false;
   }
-  if (!app.model || !zeroValid() || !app.zero) {
-    await screen(t.menuTrain, [p(t.trNeedCalib, 'warn')], [{ key: 'close', label: t.close, primary: true }]);
+  if (!app.model) {
+    const a = await screen(t.menuTrain, [p(t.trNeedCalib, 'warn')], [{ key: 'calib', label: t.trOpenCalib, primary: true }, { key: 'close', label: t.close }]);
+    if (a === 'calib') {
+      sheet.close();
+      await runCalibration(env); // после калибровки пользователь сам запускает замер из меню
+    }
     return false;
   }
+  if (!(await ensureZero(env, cancel, screen))) return false;
   if (!app.ack) {
     const a = await screen(t.trAckTitle, [p(t.trAck)], [{ key: 'ok', label: t.trAckOk, primary: true }, { key: 'no', label: t.close }]);
     if (a !== 'ok') return false;
@@ -248,7 +305,7 @@ export async function runMeasure(env: Env): Promise<void> {
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  }, { full: true });
+  }, { full: true, section: t.menuMeasure });
   const screen = makeScreen(cancel);
   if (!(await preflight(env, cancel, screen))) return sheet.close();
   const prev = lastHistory(['measure', 'before', 'after'], app.direction);
@@ -269,7 +326,7 @@ export async function runTraining(env: Env): Promise<void> {
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  }, { full: true });
+  }, { full: true, section: t.menuTrain });
   const screen = makeScreen(cancel);
   if (!(await preflight(env, cancel, screen))) return sheet.close();
 
@@ -321,7 +378,7 @@ export async function runHoldMenu(env: Env): Promise<void> {
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  }, { full: true });
+  }, { full: true, section: t.menuHold });
   const screen = makeScreen(cancel);
   const last = lastHistory(['measure', 'before', 'after'], app.direction);
   if (!last || !Number.isFinite(last.breakCm)) {

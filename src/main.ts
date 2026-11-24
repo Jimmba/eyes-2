@@ -2,6 +2,7 @@ import { DrawingUtils, FaceLandmarker, type FaceLandmarkerResult } from '@mediap
 import { runCalibration, type Env } from './calibration';
 import { runHoldMenu, runMeasure, runTraining } from './training';
 import { runDistanceCheck } from './distCheck';
+import { runZeroMenu } from './zero';
 import { onVideoFrame, startCamera, type CameraHandle } from './camera';
 import { CardMarker } from './cardMark';
 import { state } from './config';
@@ -59,6 +60,7 @@ txt('miMeasure', t.menuMeasure);
 txt('miTrain', t.menuTrain);
 txt('miDist', t.menuDist);
 txt('miHold', t.menuHold);
+txt('miZero', t.menuZero);
 txt('camTitle', t.camTitle);
 txt('camText', t.camText);
 txt('camOk', t.camOn);
@@ -130,6 +132,7 @@ menuAction('miMeasure', runMeasure);
 menuAction('miTrain', runTraining);
 menuAction('miDist', runDistanceCheck);
 menuAction('miHold', runHoldMenu);
+menuAction('miZero', runZeroMenu);
 $('miCsv').addEventListener('click', () => {
   menu.hidden = true;
   if (recorder.count === 0) alert(t.csvEmpty);
@@ -412,7 +415,7 @@ function processFrame(now: number): void {
     zBuf.length = 0;
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
-    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '']);
+    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '', app.annot.user, app.annot.det]);
     return;
   }
   const lm = res.faceLandmarks[i];
@@ -467,6 +470,7 @@ function processFrame(now: number): void {
       L.dx, L.dy, L.openness, L.irisDiamPx,
       pose?.yaw ?? NaN, pose?.pitch ?? NaN, pose?.roll ?? NaN, pose?.tz ?? NaN,
       ...m1.csv,
+      app.annot.user, app.annot.det,
     ]);
   }
 }
