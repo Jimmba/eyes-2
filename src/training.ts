@@ -5,7 +5,8 @@ import { median } from './core/filters';
 import { t } from './i18n';
 import { FrameInfo, addHistory, app, lastHistory, persist, zeroValid } from './state';
 import type { HistRec } from './profile';
-import { Cancel, captureUntil, h, sheet } from './ui';
+import { Cancel, captureUntil, h, onTap, sheet } from './ui';
+import { HoldInit, holdSummary, runHold } from './exercise';
 import { fmtDate, makeScreen, p, sg } from './wizard';
 
 const MAX_ATTEMPT_SEC = 60;
@@ -53,9 +54,11 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   let markReturn = NaN;
   let breakWall = 0;
   let ended = false;
+  let recording = false; // касания и события камеры до старта записи (обратный отсчёт) не считаются
   let maxZ = 0;
   const curZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zs) ? app.lastInfo.zs : NaN);
   const stop = collect((i) => {
+    if (!recording) return;
     if (Number.isFinite(i.zs)) maxZ = Math.max(maxZ, i.zs);
     const e = det.push({ t: i.t, value: i.devInst, valid: i.face && i.valid && Number.isFinite(i.devInst), z: i.zs });
     if (!e) return;
@@ -72,7 +75,7 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   // --- экран попытки: живое расстояние, состояние и кнопка, которая меняется по ходу ---
   const live = h('p', { class: 'big' }, '…');
   const status = h('p', { class: 'status' }, t.trStateWait);
-  const btn = h('button', { class: 'markbtn' }, t.trMark);
+  const btn = h('div', { class: 'markpad' }, t.trMark, h('small', null, t.trTapHint));
   const endBtn = h('button', {}, t.trEndAttempt);
   const phase = (): 'fused' | 'broken' | 'done' => {
     const hasBreak = !!camBrk || Number.isFinite(markBreak);
@@ -88,22 +91,23 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     if (ph === 'fused') {
       status.textContent = t.trStateWait;
       status.className = 'status';
-      btn.textContent = t.trMark;
-      btn.className = 'markbtn';
+      btn.replaceChildren(t.trMark, h('small', null, t.trTapHint));
+      btn.className = 'markpad';
     } else if (ph === 'broken') {
       status.textContent = `${t.trStateBroken}: ${fmt(bc)}${camBrk ? ` (${t.trSrcCam})` : ` (${t.trSrcMark})`}. ${t.trStateReturnHint}`;
       status.className = 'status brk';
-      btn.textContent = t.trMarkReturn;
-      btn.className = 'markbtn pressed';
+      btn.replaceChildren(t.trMarkReturn, h('small', null, t.trTapHint));
+      btn.className = 'markpad pressed';
     } else {
       status.textContent = `${t.trStateBroken}: ${fmt(bc)} → ${t.trStateReturned}: ${fmt(rc)}`;
       status.className = 'status ok';
-      btn.textContent = t.trMarkDone;
-      btn.className = 'markbtn done';
+      btn.replaceChildren(t.trMarkDone);
+      btn.className = 'markpad done';
     }
   };
-  btn.addEventListener('click', () => {
-    const z = curZ();
+  const stopTap = onTap(() => {
+    if (!recording) return;
+    const z = Number.isFinite(app.lastInfo?.zq ?? NaN) ? (app.lastInfo as { zq: number }).zq : curZ();
     const ph = phase();
     if (ph === 'fused') {
       markBreak = z;
@@ -117,7 +121,7 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   });
   endBtn.addEventListener('click', () => (ended = true));
   const timer = setInterval(paint, 200);
-  sheet.set(title, p(app.direction === 'away' ? t.trWaitAway : t.trWaitCloser, 'big'), live, status, h('div', { class: 'btnrow' }, btn, endBtn));
+  sheet.set(title, p(app.direction === 'away' ? t.trWaitAway : t.trWaitCloser, 'big'), live, status, btn, h('div', { class: 'btnrow' }, endBtn));
   paint();
   env.recorder.scene = scene;
   const r = await captureUntil({
@@ -125,10 +129,12 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     maxSec: MAX_ATTEMPT_SEC,
     cancel,
     isDone: () => ended || phase() === 'done' || (breakWall > 0 && performance.now() - breakWall > RETURN_WAIT_MS),
+    onStart: () => (recording = true),
     onEnd: () => (env.recorder.scene = null),
   });
   clearInterval(timer);
   stop();
+  stopTap();
   if (r === 'cancel') return 'cancel';
   const b = camBrk as DetEvent | null;
   const q = camRet as DetEvent | null;
@@ -242,7 +248,7 @@ export async function runMeasure(env: Env): Promise<void> {
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  });
+  }, { full: true });
   const screen = makeScreen(cancel);
   if (!(await preflight(env, cancel, screen))) return sheet.close();
   const prev = lastHistory(['measure', 'before', 'after'], app.direction);
@@ -257,13 +263,13 @@ export async function runMeasure(env: Env): Promise<void> {
   sheet.close();
 }
 
-/** Сессия: замер «до» (3) → упражнение 1 (5) → замер «после» (3) → итог. */
+/** Сессия: замер «до» (3 цикла) → удержание на границе (3 мин) → замер «после» (3 цикла) → итог. */
 export async function runTraining(env: Env): Promise<void> {
   const cancel = new Cancel();
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  });
+  }, { full: true });
   const screen = makeScreen(cancel);
   if (!(await preflight(env, cancel, screen))) return sheet.close();
 
@@ -271,14 +277,30 @@ export async function runTraining(env: Env): Promise<void> {
   const before = await series(env, cancel, screen, 'before', t.trBefore, 3);
   if (!before) return;
   const sb = save('before', before);
-  const ex = await series(env, cancel, screen, 'ex1', t.trEx1, 5);
-  if (!ex) return;
-  const se = save('exercise', ex);
+
+  let exNodes: Node[] = [];
+  if (!Number.isFinite(sb.breakCm)) {
+    const r = await screen(t.hxName, [p(t.hxNoBreak, 'warn')], [{ key: 'next', label: t.next, primary: true }]);
+    if (r === 'cancel') return;
+  } else {
+    const init: HoldInit = { breakCm: sb.breakCm, returnCm: sb.returnCm, source: t.hxFromMeasure };
+    const o = await runHold(env, cancel, screen, init, true);
+    if (o === 'cancel') return;
+    if (o !== 'skip') {
+      exNodes = holdSummary(o);
+      for (;;) {
+        const r = await screen(t.hxName, exNodes, [{ key: 'next', label: t.next, primary: true }, { key: 'csv', label: t.menuCsv }]);
+        if (r === 'cancel') return;
+        if (r === 'csv') env.recorder.download('hold');
+        else break;
+      }
+    }
+  }
   const after = await series(env, cancel, screen, 'after', t.trAfter, 3);
   if (!after) return;
   const sa = save('after', after);
 
-  const nodes: Node[] = [...summary(t.trBefore, sb), ...summary(t.trEx1, se), ...summary(t.trAfter, sa)];
+  const nodes: Node[] = [...summary(t.trBefore, sb), ...(exNodes.length ? [h('p', { class: 'big' }, t.hxName), ...exNodes.slice(0, 2)] : []), ...summary(t.trAfter, sa)];
   if (Number.isFinite(sb.boundaryCm) && Number.isFinite(sa.boundaryCm)) {
     const d = sa.boundaryCm - sb.boundaryCm;
     nodes.push(h('p', { class: 'big' }, `${t.trChange}: ${sg(d, 0)} см (${sg((d / sb.boundaryCm) * 100, 0)} %)`));
@@ -288,6 +310,31 @@ export async function runTraining(env: Env): Promise<void> {
   for (;;) {
     const a = await screen(t.trSessionDone, nodes, [{ key: 'close', label: t.close, primary: true }, { key: 'csv', label: t.menuCsv }]);
     if (a === 'csv') env.recorder.download('session');
+    else break;
+  }
+  sheet.close();
+}
+
+/** Удержание на границе отдельно: цель по последнему замеру границы. */
+export async function runHoldMenu(env: Env): Promise<void> {
+  const cancel = new Cancel();
+  sheet.open(() => {
+    cancel.cancel();
+    env.recorder.scene = null;
+  }, { full: true });
+  const screen = makeScreen(cancel);
+  const last = lastHistory(['measure', 'before', 'after'], app.direction);
+  if (!last || !Number.isFinite(last.breakCm)) {
+    await screen(t.hxName, [p(t.hxNeedMeasure, 'warn')], [{ key: 'close', label: t.close, primary: true }]);
+    return sheet.close();
+  }
+  if (!(await preflight(env, cancel, screen))) return sheet.close();
+  const init: HoldInit = { breakCm: last.breakCm, returnCm: last.returnCm, source: `${t.hxFromHistory} ${fmtDate(last.at)}` };
+  const o = await runHold(env, cancel, screen, init, false);
+  if (o === 'cancel' || o === 'skip') return sheet.close();
+  for (;;) {
+    const r = await screen(t.hxName, holdSummary(o), [{ key: 'close', label: t.close, primary: true }, { key: 'csv', label: t.menuCsv }]);
+    if (r === 'csv') env.recorder.download('hold');
     else break;
   }
   sheet.close();

@@ -40,3 +40,9 @@ test('поле зрения по диагонали паспорта: кадр 1
   assert.ok(port > 55 && port < 75, `portrait ${port}`);
   assert.ok(Math.abs(fovVerticalFromDiagonal(80, 4, 3) - 2 * Math.atan(0.6 * Math.tan((80 * Math.PI) / 360)) * 180 / Math.PI) < 1e-6);
 });
+
+test('высота буквы по угловым минутам: 7,5′ на 40 см ≈ 0,87 мм; растёт линейно с расстоянием', async () => {
+  const { letterHeightMm } = await import('../src/core/scale');
+  assert.ok(Math.abs(letterHeightMm(7.5, 400) - 0.8727) < 0.005);
+  assert.ok(Math.abs(letterHeightMm(15, 800) / letterHeightMm(15, 400) - 2) < 1e-6);
+});

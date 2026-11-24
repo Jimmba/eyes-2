@@ -2,7 +2,7 @@
   "name": "strabismus-trainer",
   "version": "0.0.1",
   "private": true,
-  "description": "M3.1: граница срыва, проверка расстояния, окно камеры",
+  "description": "M3.2: удержание на границе, касание/пробел, страницы во весь экран",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

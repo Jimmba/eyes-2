@@ -121,18 +121,31 @@ export async function captureUntil(o: { prep: number; maxSec: number; cancel: Ca
   }
 }
 
-// ---- нижнее окно (видео остаётся видимым над ним) ----
+// ---- экран-страница (во весь экран) или нижняя панель над видео (калибровка) ----
 let closeCb: (() => void) | null = null;
 export const sheet = {
   get isOpen(): boolean {
     return !$('sheet').hidden;
   },
-  open(onClose?: () => void): void {
-    $('sheet').hidden = false;
+  /** Открыта страница во весь экран (видео под ней не нужно: превью не рисуем). */
+  get isFull(): boolean {
+    return !$('sheet').hidden && $('sheet').classList.contains('full');
+  },
+  /** full: страница во весь экран (замеры, упражнения); иначе нижняя панель, видео остаётся видимым (калибровка). head: заголовок с крестиком. */
+  open(onClose?: () => void, opts: { full?: boolean; head?: boolean } = {}): void {
+    const el = $('sheet');
+    el.classList.toggle('full', !!opts.full);
+    el.classList.toggle('nohead', opts.head === false);
+    el.hidden = false;
     closeCb = onClose ?? null;
+  },
+  /** Показать или спрятать заголовок с крестиком (в упражнении он не нужен: мишень у верхнего края). */
+  head(show: boolean): void {
+    $('sheet').classList.toggle('nohead', !show);
   },
   close(): void {
     $('sheet').hidden = true;
+    $('sheet').classList.remove('full', 'nohead');
     const cb = closeCb;
     closeCb = null;
     cb?.();
@@ -144,3 +157,28 @@ export const sheet = {
   },
 };
 $('sheetClose').addEventListener('click', () => sheet.close());
+
+/**
+ * Касание экрана в любом месте или пробел (на ноутбуке). Нажатия по кнопкам, полям и ссылкам не считаются.
+ * Возвращает функцию отключения. Работает, только пока страница открыта.
+ */
+export function onTap(cb: () => void): () => void {
+  const el = $('sheet');
+  const click = (e: Event) => {
+    if ((e.target as HTMLElement | null)?.closest('button, input, select, textarea, a, label')) return;
+    cb();
+  };
+  const key = (e: KeyboardEvent) => {
+    if (e.code !== 'Space' || e.repeat || !sheet.isOpen) return;
+    const tg = e.target as HTMLElement | null;
+    if (tg && /^(INPUT|SELECT|TEXTAREA)$/.test(tg.tagName)) return;
+    e.preventDefault(); // иначе пробел «нажмёт» кнопку в фокусе
+    cb();
+  };
+  el.addEventListener('click', click);
+  window.addEventListener('keydown', key, true);
+  return () => {
+    el.removeEventListener('click', click);
+    window.removeEventListener('keydown', key, true);
+  };
+}

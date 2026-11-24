@@ -2,7 +2,7 @@
 import type { FaceModel, LM } from './core/faceModel';
 import type { M3, V3 } from './core/linalg';
 import { ScaleMethod, ScaleSetup, defaultScale } from './core/scale';
-import { GainsRec, HistRec, ScreenRec, clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
+import { ExPrefs, GainsRec, HistRec, ScreenRec, clearStored, loadStored, modelToRec, recToModel, saveStored } from './profile';
 
 export interface ZeroRec {
   R: number; // угол правого глаза к носу, °
@@ -33,6 +33,7 @@ export interface FrameInfo {
   rawV: { R: number; L: number }; // вертикальный угол без коэффициента (вверх > 0)
   eyeCam?: { R: V3; L: V3 }; // центры глазных яблок в системе камеры, мм
   z: number;
+  zq: number; // то же, но быстрее (медиана 3 кадров): для подсказок в упражнении
   zs: number; // расстояние, сглажено медианой по последним кадрам, мм (его показываем и пишем в результаты)
   ipd: number;
   sIris: number; // мм/px по текущему размеру радужки
@@ -56,6 +57,7 @@ export const app = {
   cameraFov: {} as Record<string, number>,
   distK: {} as Record<string, number>,
   history: [] as HistRec[],
+  ex: { size: 'medium', dyn: false } as ExPrefs,
   gains: null as Gains | null,
   gainsAll: {} as Record<string, Gains>,
   screen: null as ScreenCal | null,
@@ -93,7 +95,7 @@ export function addHistory(r: HistRec): void {
 }
 /** Прошлый итог того же вида и направления (для сравнения «было → стало»). */
 export const lastHistory = (kinds: HistRec['kind'][], direction: 'away' | 'closer'): HistRec | undefined =>
-  [...app.history].reverse().find((r) => kinds.includes(r.kind) && r.direction === direction && Number.isFinite(r.boundaryCm));
+  [...app.history].reverse().find((r) => kinds.includes(r.kind) && r.direction === direction && (Number.isFinite(r.boundaryCm) || Number.isFinite(r.holdCm ?? NaN)));
 
 export function setGains(g: Gains): void {
   app.gains = g;
@@ -124,6 +126,7 @@ export function persist(): void {
     camera: Object.keys(app.cameraFov).length ? app.cameraFov : undefined,
     distK: Object.keys(app.distK).length ? app.distK : undefined,
     history: app.history.length ? app.history : undefined,
+    ex: app.ex,
     gains: Object.keys(app.gainsAll).length ? app.gainsAll : undefined,
     screen: app.screen ?? undefined,
     ack: app.ack || undefined,
@@ -162,6 +165,7 @@ export function restore(): void {
   app.cameraFov = s.camera ?? {};
   app.distK = s.distK ?? {};
   app.history = s.history ?? [];
+  app.ex = s.ex ?? { size: 'medium', dyn: false };
   app.gainsAll = s.gains ?? {};
   app.screen = s.screen ?? null;
   app.ack = s.ack ?? 0;

@@ -14,7 +14,7 @@ export async function runDistanceCheck(env: Env): Promise<void> {
   sheet.open(() => {
     cancel.cancel();
     env.recorder.scene = null;
-  });
+  }, { full: true });
   const screen = makeScreen(cancel);
   if (!(await env.ensureCamera())) {
     sheet.set(t.distCheckName, p(t.needCamera));

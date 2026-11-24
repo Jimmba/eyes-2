@@ -43,6 +43,15 @@ export interface HistRec {
   returnCm: number; // медиана дистанции возврата
   boundaryCm: number; // середина между срывом и возвратом
   n: number;
+  holdCm?: number; // упражнение «удержание»: лучшая дистанция, на которой слияние продержалось
+  holdSec?: number; // самое долгое непрерывное удержание
+  breaks?: number;
+  durSec?: number;
+  size?: string; // размер мишени в упражнении
+}
+export interface ExPrefs {
+  size: 'small' | 'medium' | 'large';
+  dyn: boolean; // постоянный угловой размер мишени (масштабируется с расстоянием)
 }
 export interface Stored {
   v: 1;
@@ -50,7 +59,8 @@ export interface Stored {
   model?: ModelRec;
   camera?: Record<string, number>; // поле зрения по вертикали (°): ключ «камера|ширина×высота»
   distK?: Record<string, number>; // поправка расстояния (множитель) по проверке с линейкой: тот же ключ
-  history?: HistRec[]; // интерим до M4: итоги замеров границы срыва
+  history?: HistRec[]; // интерим до этапа профилей (M6): итоги замеров и упражнений
+  ex?: ExPrefs;
   gains?: Record<string, GainsRec>; // ключ: камера
   screen?: ScreenRec;
   ack?: number; // время подтверждения предупреждения о противопоказаниях

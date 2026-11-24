@@ -1,6 +1,6 @@
 import { DrawingUtils, FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import { runCalibration, type Env } from './calibration';
-import { runMeasure, runTraining } from './training';
+import { runHoldMenu, runMeasure, runTraining } from './training';
 import { runDistanceCheck } from './distCheck';
 import { onVideoFrame, startCamera, type CameraHandle } from './camera';
 import { CardMarker } from './cardMark';
@@ -16,7 +16,7 @@ import { t } from './i18n';
 import { Recorder } from './recorder';
 import { saveSnapshot } from './snapshot';
 import { FrameInfo, app, currentDistK, currentFov, effectiveModel, fovCalibrated, loadGainsForCamera, publish, resetAll, restore, zeroValid } from './state';
-import { Cancel, timedCapture } from './ui';
+import { Cancel, sheet, timedCapture } from './ui';
 import { createLandmarker, type Landmarker } from './vision';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -58,6 +58,7 @@ txt('dirLabel', t.dirLabel);
 txt('miMeasure', t.menuMeasure);
 txt('miTrain', t.menuTrain);
 txt('miDist', t.menuDist);
+txt('miHold', t.menuHold);
 txt('camTitle', t.camTitle);
 txt('camText', t.camText);
 txt('camOk', t.camOn);
@@ -128,6 +129,7 @@ menuAction('miCalib', runCalibration);
 menuAction('miMeasure', runMeasure);
 menuAction('miTrain', runTraining);
 menuAction('miDist', runDistanceCheck);
+menuAction('miHold', runHoldMenu);
 $('miCsv').addEventListener('click', () => {
   menu.hidden = true;
   if (recorder.count === 0) alert(t.csvEmpty);
@@ -277,6 +279,7 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
   zBuf.push(z);
   if (zBuf.length > 7) zBuf.shift();
   const zs = median(zBuf);
+  const zq = median(zBuf.slice(-3));
   const offR = eyeOffsetMm(lm, w, h, 'right', s, Rimg, f);
   const offL = eyeOffsetMm(lm, w, h, 'left', s, Rimg, f);
   const rawH = { R: angleDeg(offR.dxMm), L: angleDeg(offL.dxMm) };
@@ -307,7 +310,7 @@ function computeM1(lm: { x: number; y: number; z: number }[], w: number, h: numb
   if (zeroValid() && app.zero) devInst = deviationDeg(angR, app.zero.R, z, app.zero.z, ipd) + deviationDeg(angL, app.zero.L, z, app.zero.z, ipd);
 
   const eyeCam = Rimg ? { R: eyeCenterCam(cornersMidCam(lm, w, h, 'right', s, f), Rimg), L: eyeCenterCam(cornersMidCam(lm, w, h, 'left', s, f), Rimg) } : undefined;
-  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, Rimg, irisPx, open, openR: R.openness, openL: L.openness, angR, angL, rawH, rawV, eyeCam, z, zs, ipd, sIris, f, devInst, valid };
+  const info: FrameInfo = { t: now, face: true, w, h, lm, Rraw, Rimg, irisPx, open, openR: R.openness, openL: L.openness, angR, angL, rawH, rawV, eyeCam, z, zs, zq, ipd, sIris, f, devInst, valid };
   const fovTxt = `${currentFov(w, h).toFixed(0)}°${fovCalibrated(w, h) ? '' : ' (по умолчанию)'}`;
   const lines = [
     `── M1 ── радужка ${app.iris.irisMm.toFixed(2)} мм (${t.methodNames[app.iris.method]}), FOV ${fovTxt}, режим ${Rimg ? '3D (поза)' : '2D (нет матрицы)'}`,
@@ -398,13 +401,14 @@ function processFrame(now: number): void {
     return;
   }
   const s = pw / w;
-  ctx.drawImage(video, 0, 0, pw, ph);
+  const showPreview = !sheet.isFull; // за страницей во весь экран превью не видно: не рисуем
+  if (showPreview) ctx.drawImage(video, 0, 0, pw, ph);
 
   const res = engine.lm.detectForVideo(video, now);
   const i = pickFace(res);
   const f0 = focalFromVerticalFov(h, currentFov(w, h));
   if (i < 0) {
-    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, openR: NaN, openL: NaN, angR: NaN, angL: NaN, rawH: { R: NaN, L: NaN }, rawV: { R: NaN, L: NaN }, z: NaN, zs: NaN, ipd: NaN, sIris: NaN, f: f0, devInst: NaN, valid: false });
+    publish({ t: now, face: false, w, h, irisPx: NaN, open: NaN, openR: NaN, openL: NaN, angR: NaN, angL: NaN, rawH: { R: NaN, L: NaN }, rawV: { R: NaN, L: NaN }, z: NaN, zs: NaN, zq: NaN, ipd: NaN, sIris: NaN, f: f0, devInst: NaN, valid: false });
     zBuf.length = 0;
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
@@ -421,7 +425,7 @@ function processFrame(now: number): void {
 
   const pose = res.facialTransformationMatrixes?.[i] ? poseFromMatrix(res.facialTransformationMatrixes[i].data) : null;
 
-  if (state.isDev) {
+  if (state.isDev && showPreview) {
     const du = new DrawingUtils(ctx);
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_CONTOURS, { color: '#4dd0e1', lineWidth: 1 });
     du.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: '#ff5252', lineWidth: 2 });

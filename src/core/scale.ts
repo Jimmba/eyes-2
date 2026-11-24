@@ -68,3 +68,6 @@ export function fovVerticalFromDiagonal(diagDeg: number, w: number, h: number): 
   const u = Math.tan((diagDeg * Math.PI) / 360) / 2.5; // тангенс на единицу сенсора (полудиагональ = 2,5)
   return (2 * Math.atan((H / 2) * u) * 180) / Math.PI;
 }
+
+/** Высота буквы (мм), чтобы она занимала угол arcmin (угловые минуты) на расстоянии distMm. */
+export const letterHeightMm = (arcmin: number, distMm: number): number => distMm * Math.tan((arcmin / 60) * (Math.PI / 180));
