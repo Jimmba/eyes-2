@@ -196,6 +196,8 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
       mark.style.left = `${(ctrl.gaugePos(z) * 100).toFixed(1)}%`;
       mark.className = `mark${c.style === 'go' ? ' in' : ''}`;
       face.className = `exFace${faceOk ? '' : ' bad'}`;
+      app.annot.phase = ['enter', 'hold', 'recover', 'up', 'down', 'done'].indexOf(ctrl.phase);
+      app.annot.target = ctrl.H;
       stat.textContent = `${t.hxHoldStat} ${ctrl.holdSec.toFixed(0)}/${HOLD_DEFAULTS.successSec} с · ${t.hxBreaks} ${ctrl.breaks.length} · ${t.hxSteps} ${ctrl.ups} · ${mmss(HOLD_DEFAULTS.totalSec - ctrl.elapsedSec)}`;
       if (now - lastLetter > 6000) {
         lastLetter = now;
@@ -214,6 +216,8 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
     stopSink();
     stopTap();
     app.annot.det = 0;
+    app.annot.phase = 0;
+    app.annot.target = 0;
     env.recorder.scene = null;
     sheet.head(true);
   }

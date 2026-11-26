@@ -67,7 +67,7 @@ export const app = {
   lastInfo: null as FrameInfo | null,
   pendingEvent: '',
   /** Пометки для журнала CSV: user = 1, пока пользователь держит касание (есть срыв); det = 1, пока детектор камеры считает, что срыв. */
-  annot: { user: 0, det: 0 },
+  annot: { user: 0, det: 0, phase: 0, target: 0 }, // phase/target: фаза упражнения «удержание» (0 вход, 1 держим, 2 срыв, 3 вверх, 4 вниз, 5 конец) и цель, см
   sinks: new Set<(i: FrameInfo) => void>(),
 };
 

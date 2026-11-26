@@ -1,7 +1,8 @@
 // Детектор срыва по окну и собственной базе попытки (по разбору журнала замера 24 ноября).
 // Почему не по нулю: один кадр даёт вергенцию с шумом ±3-5°, а «слитый» уровень между попытками гуляет на ±3° от нуля,
 // поэтому порог относительно нуля пришлось бы ставить выше самого срыва (≈11° против срывов в 6-16°).
-// Здесь сигнал это медиана за окно ~1 с, а сравнивается он с базой: медианой слитых кадров за предыдущие секунды.
+// Здесь сигнал это медиана за окно ~1 с, а сравнивается он с базой: медианой слитых кадров за [t − 8 с, t − 2,5 с].
+// База отстаёт намеренно: срыв по журналам 24-25.11 развивается как нарастание за 2-4 с, и более короткая база его «съедала».
 import { median } from './filters';
 import type { DetEvent, DetSample } from './breakDetector';
 
@@ -16,7 +17,7 @@ export interface WinOpts {
   persistMs: number; // сколько держится отклонение
   returnRatio: number; // возврат: |окно − база| < T · returnRatio
 }
-export const WIN_DEFAULTS: WinOpts = { thresholdDeg: 5, winMs: 1000, minN: 4, baseFromMs: 5000, baseToMs: 1000, minBaseN: 6, settleMs: 2500, persistMs: 500, returnRatio: 0.5 };
+export const WIN_DEFAULTS: WinOpts = { thresholdDeg: 5, winMs: 1000, minN: 4, baseFromMs: 8000, baseToMs: 2500, minBaseN: 6, settleMs: 2500, persistMs: 500, returnRatio: 0.5 };
 export const RETURN_SETTLE_MS = 2000;
 
 interface Fr {

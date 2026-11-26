@@ -5,7 +5,7 @@ export const CSV_HEADER = [
   'R_dx', 'R_dy', 'R_open', 'R_iris_px',
   'L_dx', 'L_dy', 'L_open', 'L_iris_px',
   'yaw', 'pitch', 'roll', 'tz',
-  'mm_px', 'z_mm', 'angR', 'angL', 'devR', 'devL', 'vergence', 'scale_method', 'iris_mm', 'dev_inst', 'event', 'user_hold', 'det_state',
+  'mm_px', 'z_mm', 'angR', 'angL', 'devR', 'devL', 'vergence', 'scale_method', 'iris_mm', 'dev_inst', 'event', 'user_hold', 'det_state', 'ex_phase', 'ex_target_cm',
 ].join(',');
 
 export class Recorder {

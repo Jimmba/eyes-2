@@ -415,7 +415,7 @@ function processFrame(now: number): void {
     zBuf.length = 0;
     lastPanelText = `${t.noFace}\nfps ${fps.toFixed(1)}`;
     panel.textContent = lastPanelText;
-    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '', app.annot.user, app.annot.det]);
+    recorder.push([0, fps, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, '', NaN, NaN, '', app.annot.user, app.annot.det, app.annot.phase, app.annot.target]);
     return;
   }
   const lm = res.faceLandmarks[i];
@@ -470,7 +470,7 @@ function processFrame(now: number): void {
       L.dx, L.dy, L.openness, L.irisDiamPx,
       pose?.yaw ?? NaN, pose?.pitch ?? NaN, pose?.roll ?? NaN, pose?.tz ?? NaN,
       ...m1.csv,
-      app.annot.user, app.annot.det,
+      app.annot.user, app.annot.det, app.annot.phase, app.annot.target,
     ]);
   }
 }

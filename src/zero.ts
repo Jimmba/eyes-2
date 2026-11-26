@@ -5,11 +5,21 @@ import type { Env } from './calibration';
 import { median, windowStat } from './core/filters';
 import { windowNoise } from './core/windowDetector';
 import { t } from './i18n';
-import { FrameInfo, app, zeroValid } from './state';
+import { FrameInfo, app, lastHistory, zeroValid } from './state';
 import { Cancel, h, sheet, timedCapture } from './ui';
 import { fmtTime, makeScreen, p, sg, why } from './wizard';
 
 export const ZERO_FRESH_H = 3; // ноль старше этого считается устаревшим (новая сессия): предлагаем пройти заново
+
+/** Граница по последнему замеру (см) в текущем направлении, если есть. */
+const lastBoundCm = (): number => lastHistory(['measure', 'before', 'after'], app.direction)?.breakCm ?? NaN;
+
+/** Подсказка, где записывать ноль: там, где слияние держится (у «срывающегося на 27 см» это ближе 23 см, а не 40). */
+function recommendation(): string {
+  const b = lastBoundCm();
+  if (!Number.isFinite(b)) return '';
+  return app.direction === 'away' ? t.s3RecAway(Math.round(b), Math.max(15, Math.round(b * 0.85))) : t.s3RecCloser(Math.round(b), Math.round(b * 1.15));
+}
 
 export const zeroAgeH = (): number => (app.zero ? (Date.now() - app.zero.at) / 3.6e6 : Infinity);
 
@@ -35,7 +45,7 @@ export async function runZeroStep(c: Ctx, title: string, opts: { force?: boolean
     if (a === 'skip') return true;
   }
   for (;;) {
-    const a = await screen(title, [why(t.whyLabel, t.s3Why), p(t.s3How)], [{ key: 'go', label: t.start2, primary: true }]);
+    const a = await screen(title, [why(t.whyLabel, t.s3Why), p(t.s3How(recommendation()))], [{ key: 'go', label: t.start2, primary: true }]);
     if (a === 'cancel') return false;
     sheet.set(title, p(t.s3Wait, 'big'));
     const S: FrameInfo[] = [];
@@ -71,7 +81,10 @@ export async function runZeroStep(c: Ctx, title: string, opts: { force?: boolean
     const drift = half >= 5 ? Math.abs(median(sum.slice(0, half)) - median(sum.slice(half))) : NaN;
     nodes.push(p(`${t.s3Noise}: ±${noise.toFixed(1)}°; ${t.s3Err}: ±${se.toFixed(1)}°.`, 'why'));
     if (se > 1.2 || drift > 4) nodes.push(p(t.s3Unstable, 'warn'));
-    if (stZ.median < 250 || stZ.median > 700) nodes.push(p(t.s3Dist, 'warn'));
+    const bound = lastBoundCm();
+    const zc = stZ.median / 10;
+    if (zc < 15 || zc > 70) nodes.push(p(t.s3Dist, 'warn'));
+    else if (Number.isFinite(bound) && (app.direction === 'away' ? zc > bound : zc < bound)) nodes.push(p(t.s3PastBound(Math.round(bound)), 'warn'));
     const k = await screen(title, nodes, [{ key: 'save', label: t.next, primary: true }, { key: 'redo', label: t.redo }]);
     if (k === 'cancel') return false;
     if (k === 'save') {

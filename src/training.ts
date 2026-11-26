@@ -51,8 +51,6 @@ function worsened(d: number[], direction: 'away' | 'closer'): boolean {
   return direction === 'away' ? last < 0.7 * base : last > 1.3 * base;
 }
 
-/** Задержка человека: от срыва до нажатия (по журналу 24.11 ≈ 1,3-1,9 с). */
-const REACTION_LAG_MS = 1500;
 const HOLD_GRACE_MS = 2500; // после отпускания ждём ещё: вдруг срыв вернулся
 
 async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string): Promise<Attempt | 'cancel'> {
@@ -74,11 +72,6 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   let ended = false;
   let recording = false; // касания и события камеры до старта записи (обратный отсчёт) не считаются
   let maxZ = 0;
-  const zHist: { t: number; z: number }[] = []; // дистанция по времени: чтобы пересчитать нажатие на момент, когда срыв был на самом деле
-  const zAt = (t: number): number => {
-    for (let k = zHist.length - 1; k >= 0; k--) if (zHist[k].t <= t) return zHist[k].z;
-    return zHist.length ? zHist[0].z : NaN;
-  };
   const curZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zs) ? app.lastInfo.zs : NaN);
   const fastZ = () => (app.lastInfo && Number.isFinite(app.lastInfo.zq) ? app.lastInfo.zq : curZ());
   const stop = collect((i) => {
@@ -86,8 +79,6 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     const now = performance.now();
     if (Number.isFinite(i.zs)) {
       maxZ = Math.max(maxZ, i.zs);
-      zHist.push({ t: now, z: Number.isFinite(i.zq) ? i.zq : i.zs });
-      if (zHist.length > 120) zHist.shift();
     }
     const open = Math.min(i.openR, i.openL);
     const e = det.push({ t: now, value: i.devInst, valid: i.face && i.valid && open > 0.25 && Number.isFinite(i.devInst), z: i.zs });
@@ -190,12 +181,12 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
   const camReturnCm = q ? cm(q.z) : NaN;
   const markBreakRawCm = first ? cm(first.z0) : NaN;
   const markReturnCm = first ? cm(first.z1) : NaN;
-  // Нажатие всегда позже настоящего срыва: человек замечает его с задержкой. Пересчитываем на момент за REACTION_LAG_MS до нажатия.
-  const zBefore = first ? zAt(first.t0 - REACTION_LAG_MS) : NaN;
-  const markBreakCm = Number.isFinite(zBefore) ? cm(zBefore) : markBreakRawCm;
-  const lagSec = first && b ? (first.t0 - b.onsetT) / 1000 : NaN;
-  // что принять за срыв: камера, если нашла; иначе ваше нажатие с поправкой на реакцию. Возврат: ваше отпускание (оно совпадало с камерой), иначе камера.
-  const breakCm = Number.isFinite(camBreakCm) ? camBreakCm : markBreakCm;
+  // Постоянной задержки человека нет: журнал 24.11 дал нажатие позже камеры на 1,3-1,9 с, журнал 25.11 от −2 до +0,4 с
+  // (человек замечает двоение раньше, чем отклонение набирает 5°). Поэтому поправки нет: границей считается ваше нажатие
+  // (это то, что вы видите), камера идёт рядом для сверки. Если вы не нажимали, берётся камера.
+  const markBreakCm = markBreakRawCm;
+  const lagSec = first && b ? (first.t0 - b.onsetT) / 1000 : NaN; // > 0: вы нажали позже камеры
+  const breakCm = Number.isFinite(markBreakRawCm) ? markBreakRawCm : camBreakCm;
   const returnCm = Number.isFinite(markReturnCm) ? markReturnCm : camReturnCm;
   return {
     broke: Number.isFinite(breakCm),
@@ -246,9 +237,9 @@ async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeSc
     if (r.broke) {
       nodes.push(h('p', { class: 'big' }, `${t.trBreakAt}: ${fmt(r.breakCm)}${Number.isFinite(r.angle) ? ` (${sg(r.angle)}°)` : ''}`));
       nodes.push(p(Number.isFinite(r.returnCm) ? `${t.trReturnAt}: ${fmt(r.returnCm)}. ${t.trBoundary}: ${fmt(Math.min(r.breakCm, r.returnCm))}–${fmt(Math.max(r.breakCm, r.returnCm))}.` : t.trNoReturn));
-      if (Number.isFinite(r.markBreakRawCm) && !Number.isFinite(r.camBreakCm)) nodes.push(p(`${t.trCamMissed} ${t.trLagUsed}: ${fmt(r.markBreakRawCm)} → ${fmt(r.markBreakCm)}.`, 'warn'));
+      if (Number.isFinite(r.markBreakRawCm) && !Number.isFinite(r.camBreakCm)) nodes.push(p(t.trCamMissed, 'warn'));
       else if (!Number.isFinite(r.markBreakRawCm)) nodes.push(p(t.trYouNoMark, 'why'));
-      else nodes.push(p(`${t.trCamVsYou}: камера ${fmt(r.camBreakCm)}, вы нажали на ${fmt(r.markBreakRawCm)}${Number.isFinite(r.lagSec) ? `, то есть через ${r.lagSec.toFixed(1)} с после срыва` : ''}.`, 'why'));
+      else nodes.push(p(`${t.trCamVsYou}: камера ${fmt(r.camBreakCm)}, вы нажали на ${fmt(r.markBreakRawCm)}${Number.isFinite(r.lagSec) ? `; ${r.lagSec >= 0 ? 'вы позже камеры на' : 'вы раньше камеры на'} ${Math.abs(r.lagSec).toFixed(1)} с` : ''}.`, 'why'));
       if (r.holds > 0 && Number.isFinite(r.holdSec)) nodes.push(p(`${t.trHeld}: ${r.holdSec.toFixed(1)} с${r.holds > 1 ? `, нажатий ${r.holds}` : ''}.`, 'why'));
     } else nodes.push(h('p', { class: 'big' }, `${t.trNoBreak} ${r.maxCm.toFixed(0)} см`));
     const dists = out.map((x) => (x.broke ? x.breakCm : NaN));

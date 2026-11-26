@@ -9,10 +9,12 @@ interface Scene {
   cols: string[];
   rows: (number | null)[][];
 }
-const fx: Record<string, Scene> = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/measure-2026-11-24.json'), 'utf8'));
+const load = (f: string): Record<string, Scene> => JSON.parse(readFileSync(join(process.cwd(), `tests/fixtures/${f}`), 'utf8'));
+const fx24 = load('measure-2026-11-24.json');
+const fx25 = load('measure-2026-11-25.json');
 
 /** Прогон сцены из журнала (замеры 24 ноября): валидный кадр = глаза открыты (> 0,25) и есть сигнал. */
-function replay(name: string): { ev: (DetEvent & { sec: number })[]; press: number[]; release: number[]; t0: number } {
+function replay(name: string, fx: Record<string, Scene> = fx24): { ev: (DetEvent & { sec: number })[]; press: number[]; release: number[]; t0: number } {
   const sc = fx[name];
   const ix = (c: string) => sc.cols.indexOf(c);
   const det = new WindowDetector();
@@ -46,13 +48,13 @@ test('журнал 24.11, замер 3: срыв найден раньше на�
   assert.equal(ev.filter((e) => e.type === 'break').length, 1, 'после возврата ложного срыва нет');
 });
 
-test('журнал 24.11, замер 1: срыв (около 6° над базой) найден до нажатия, возврат раньше отпускания', () => {
+test('журнал 24.11, замер 1: срыв (около 6° над базой) найден до нажатия; камера держит срыв между двумя нажатиями и возвращается к последнему отпусканию', () => {
   const { ev, press, release } = replay('measure_1');
   const b = ev.find((e) => e.type === 'break');
   const r = ev.find((e) => e.type === 'return');
   assert.ok(b && r);
   assert.ok(b.sec < press[0] && press[0] - b.sec < 3, `срыв ${b.sec.toFixed(1)} с, нажатие ${press[0].toFixed(1)} с`);
-  assert.ok(r.sec > b.sec && r.sec < release[0] + 1, `возврат ${r.sec.toFixed(1)} с`);
+  assert.ok(Math.abs(r.sec - release[release.length - 1]) < 1.5, `возврат ${r.sec.toFixed(1)} с, последнее отпускание ${release[release.length - 1].toFixed(1)} с`);
 });
 
 test('журнал 24.11, замер 2 (пограничное состояние на одном расстоянии): ложных срывов вне нажатия нет', () => {
@@ -143,4 +145,32 @@ test('шум окна: медианы за 1 с тише отдельных ка
   const w = windowNoise(ts, xs);
   assert.ok(w > 0.5 && w < 3, `шум окна ${w}`);
   assert.equal(WIN_DEFAULTS.thresholdDeg, 5);
+});
+
+// Журнал 25.11 (дневной свет, ноль записан на 40 см вне слияния): детектор по базе попытки от нуля не зависит.
+test('журнал 25.11, замер 1 (отодвигание): срыв и возврат совпадают с нажатием и отпусканием в пределах ~1,5 с', () => {
+  const { ev, press, release } = replay('measure_1', fx25);
+  const b = ev.find((e) => e.type === 'break');
+  const r = ev.find((e) => e.type === 'return');
+  assert.ok(b && r);
+  assert.ok(Math.abs(b.sec - press[0]) < 1.5, `срыв ${b.sec.toFixed(1)} с, нажатие ${press[0].toFixed(1)} с`);
+  assert.ok(Math.abs(r.sec - release[0]) < 1.5, `возврат ${r.sec.toFixed(1)} с, отпускание ${release[0].toFixed(1)} с`);
+  assert.ok(Math.abs(b.z / 10 - 27) < 2, `дистанция срыва ${b.z / 10} см`);
+});
+
+test('журнал 25.11, замер 2 (нарастание за 3-4 с): срыв найден в пределах ~1 с от нажатия на ~27 см', () => {
+  const { ev, press } = replay('measure_2', fx25);
+  const b = ev.find((e) => e.type === 'break');
+  assert.ok(b, 'срыв не найден');
+  assert.ok(Math.abs(b.sec - press[0]) < 1.2, `срыв ${b.sec.toFixed(1)} с, нажатие ${press[0].toFixed(1)} с`);
+  assert.ok(Math.abs(b.z / 10 - 27) < 2.5, `дистанция срыва ${b.z / 10} см`);
+});
+
+test('журнал 25.11, замер 3 (пограничное состояние на одном расстоянии ~24 см): отклонение найдено рядом с нажатием', () => {
+  const { ev, press, release } = replay('measure_3', fx25);
+  const b = ev.find((e) => e.type === 'break');
+  assert.ok(b, 'срыв не найден');
+  assert.ok(b.sec > press[0] - 2 && b.sec < press[0] + 2, `срыв ${b.sec.toFixed(1)} с, нажатие ${press[0].toFixed(1)} с`);
+  assert.ok(Math.abs(b.z / 10 - 24) < 2, `дистанция ${b.z / 10} см`);
+  assert.ok(release[0] > b.sec);
 });
