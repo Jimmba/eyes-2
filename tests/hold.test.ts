@@ -42,9 +42,9 @@ test('вход в полосу 1 с, затем удержание; успех �
   t = until(c, t, () => 38, () => c.ups === 1, 30);
   assert.ok(t - tHold >= 19900 && t - tHold <= 20300, `прошло ${t - tHold} мс`);
   assert.equal(c.phase, 'up');
-  assert.equal(c.H, 40);
+  assert.equal(c.H, 39); // ступень 1 см
   assert.equal(c.bestHoldCm, 38);
-  t = until(c, t, () => 40, () => c.phase === 'enter', 5);
+  t = until(c, t, () => 39, () => c.phase === 'enter', 5);
   assert.equal(c.phase, 'enter');
 });
 
@@ -82,7 +82,7 @@ test('два ранних срыва подряд: ступень вниз', () 
   c.onReturn(37, t, 'tap');
   assert.equal(c.phase, 'down');
   assert.equal(c.downs, 1);
-  assert.equal(c.H, 36);
+  assert.equal(c.H, 37);
 });
 
 test('поздний срыв не считается ранним', () => {
@@ -154,4 +154,54 @@ test('шкала: цель в центре, ближе слева, дальше 
   assert.equal(c.gaugePos(c.H), 0.5);
   assert.ok(c.gaugePos(c.H - 5) < 0.5 && c.gaugePos(c.H + 5) > 0.5);
   assert.equal(c.gaugePos(NaN), 0.5);
+});
+
+test('узкая полоса: на 1,8 см ближе цели время не засчитывается (журнал 26.11: держал 24,5 при цели 26,2)', () => {
+  const c = mk(1, 40, 34);
+  let t = until(c, 0, () => 38, () => c.phase === 'hold', 3);
+  const h0 = c.holdSec;
+  t = run(c, t, 5, 38 - 1.8);
+  assert.ok(c.holdSec - h0 < 0.5, `засчитано ${c.holdSec - h0} с`);
+  assert.ok(c.tol < 1.8);
+});
+
+test('цель недостижима: 15 с «чуть дальше» без движения опускают цель на ступень', () => {
+  const c = mk(1, 40, 34);
+  let t = until(c, 0, () => 38, () => c.phase === 'hold', 3);
+  c.onBreak(41, t, 'camera');
+  c.onReturn(36, t, 'camera');
+  const H = c.H;
+  t = run(c, t, 17, H - 4); // стоит заметно ближе цели
+  assert.ok(c.H < H, `цель ${c.H}, была ${H}`);
+  assert.equal(c.downs, 1);
+});
+
+test('срыв ближе потолка опускает потолок: выше места срыва +1 см не командуем', () => {
+  const c = mk(1, 40, 34);
+  assert.ok(c.hHard > 45);
+  const t = until(c, 0, () => 38, () => c.phase === 'hold', 3);
+  c.onBreak(37.5, t, 'tap');
+  assert.ok(c.hHard <= 38.5 + 1e-9, `потолок ${c.hHard}`);
+});
+
+test('потолок ниже текущей цели: успех не опускает цель, а держит её', () => {
+  const c = mk(1, 40, 34);
+  let t = until(c, 0, () => 38, () => c.phase === 'hold', 3);
+  c.onBreak(37, t, 'tap'); // потолок станет 38
+  c.onReturn(35, t, 'tap');
+  const H = c.H;
+  t = until(c, t, () => c.H, () => c.ups === 1, 60);
+  assert.ok(c.H >= H - 1e-9 || c.downs > 0, `цель ${c.H}`);
+  assert.ok(c.atLimit || c.H <= H + 1e-9);
+});
+
+import { TARGET_DEG, dynamicStage } from '../src/core/hold';
+test('динамичный режим: по трети времени крупная, средняя, мелкая', () => {
+  assert.equal(dynamicStage(0, 180), 'large');
+  assert.equal(dynamicStage(59.9, 180), 'large');
+  assert.equal(dynamicStage(60, 180), 'medium');
+  assert.equal(dynamicStage(119.9, 180), 'medium');
+  assert.equal(dynamicStage(120, 180), 'small');
+  assert.equal(dynamicStage(500, 180), 'small');
+  assert.ok(TARGET_DEG.small < TARGET_DEG.medium && TARGET_DEG.medium < TARGET_DEG.large);
 });

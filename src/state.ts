@@ -57,7 +57,7 @@ export const app = {
   cameraFov: {} as Record<string, number>,
   distK: {} as Record<string, number>,
   history: [] as HistRec[],
-  ex: { size: 'medium', dyn: false } as ExPrefs,
+  ex: { size: 'medium' } as ExPrefs,
   gains: null as Gains | null,
   gainsAll: {} as Record<string, Gains>,
   screen: null as ScreenCal | null,
@@ -67,7 +67,7 @@ export const app = {
   lastInfo: null as FrameInfo | null,
   pendingEvent: '',
   /** Пометки для журнала CSV: user = 1, пока пользователь держит касание (есть срыв); det = 1, пока детектор камеры считает, что срыв. */
-  annot: { user: 0, det: 0, phase: 0, target: 0 }, // phase/target: фаза упражнения «удержание» (0 вход, 1 держим, 2 срыв, 3 вверх, 4 вниз, 5 конец) и цель, см
+  annot: { user: 0, det: 0, phase: 0, target: 0, size: 0 }, // phase/target: фаза упражнения «удержание» (0 вход, 1 держим, 2 срыв, 3 вверх, 4 вниз, 5 конец), цель, см и размер мишени (0 нет, 1 мелкая, 2 средняя, 3 крупная)
   sinks: new Set<(i: FrameInfo) => void>(),
 };
 
@@ -167,7 +167,7 @@ export function restore(): void {
   app.cameraFov = s.camera ?? {};
   app.distK = s.distK ?? {};
   app.history = s.history ?? [];
-  app.ex = s.ex ?? { size: 'medium', dyn: false };
+  app.ex = { size: (['small', 'medium', 'large', 'dynamic'] as const).includes(s.ex?.size as never) ? (s.ex?.size as ExPrefs['size']) : 'medium' };
   app.gainsAll = s.gains ?? {};
   app.screen = s.screen ?? null;
   app.ack = s.ack ?? 0;

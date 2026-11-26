@@ -32,7 +32,7 @@ export class HoldController {
   phase: HoldPhase = 'enter';
   H: number; // целевая дистанция, см
   readonly H0: number;
-  readonly hHard: number;
+  hHard: number; // уменьшается, когда срыв случился ближе исходного потолка
   readonly hEasy: number;
   holdMs = 0; // непрерывное удержание текущей ступени
   longestHoldMs = 0;
@@ -52,6 +52,7 @@ export class HoldController {
   private side: -1 | 0 | 1 = 0;
   private early = 0; // ранние срывы подряд
   private recent: number[] = [];
+  private enterMs = 0; // сколько пользователь не добирается до цели (на лёгкой стороне)
 
   constructor(readonly cfg: HoldCfg) {
     const { dir, breakCm: b, returnCm: r } = cfg;
@@ -65,11 +66,13 @@ export class HoldController {
     this.H = dir > 0 ? Math.max(this.H0, this.hEasy) : Math.min(this.H0, this.hEasy);
   }
 
+  // Журнал 26.11: граница срыва 25-27 см, возврат 21-23 см, то есть вся рабочая зона шириной 3-5 см. Прежние полоса ±2 см и
+  // ступень 2 см (журнал 26.11: цель ушла на 28 см, а пользователь держал 24,5 см и всё равно «выполнял» ступени) были для неё грубыми.
   get tol(): number {
-    return Math.max(2, 0.06 * this.H);
+    return Math.max(1.2, 0.045 * this.H);
   }
   get step(): number {
-    return Math.max(2, 0.03 * this.H);
+    return Math.max(1, 0.02 * this.H);
   }
   get elapsedSec(): number {
     return Number.isFinite(this.startT) && Number.isFinite(this.lastT) ? (this.lastT - this.startT) / 1000 : 0;
@@ -116,6 +119,21 @@ export class HoldController {
       if (this.bandMs >= 1000) {
         this.to('hold', t);
         this.holdMs = 0;
+        this.enterMs = 0;
+        return;
+      }
+      // не добирается до цели 15 с (журнал 26.11: 30 с команды «чуть дальше», когда цель ушла за границу): опускаем цель
+      const easy = this.cfg.dir > 0 ? this.side < 0 : this.side > 0;
+      this.enterMs = easy ? this.enterMs + dt : 0;
+      if (this.enterMs >= 15000) {
+        const next = this.cfg.dir > 0 ? Math.max(this.H - this.step, this.hEasy) : Math.min(this.H + this.step, this.hEasy);
+        this.enterMs = 0;
+        if (Math.abs(next - this.H) > 0.01) {
+          this.H = next;
+          this.downs++;
+          this.side = 0;
+          this.to('down', t);
+        }
       }
       return;
     }
@@ -134,8 +152,9 @@ export class HoldController {
     this.holdMs = 0;
     this.early = 0;
     const next = dir > 0 ? Math.min(this.H + this.step, this.hHard) : Math.max(this.H - this.step, this.hHard);
-    if (Math.abs(next - this.H) < 0.01) {
-      this.atLimit = true; // выше нельзя: продолжаем держать
+    const gain = dir > 0 ? next - this.H : this.H - next;
+    if (gain < 0.01) {
+      this.atLimit = true; // выше нельзя (потолок или место срыва): продолжаем держать
       return;
     }
     this.H = next;
@@ -147,6 +166,11 @@ export class HoldController {
   onBreak(zCm: number, t: number, src: 'camera' | 'tap'): boolean {
     if (this.phase === 'recover' || this.phase === 'done') return false;
     this.breaks.push({ cm: zCm, src, tSec: this.elapsedSec });
+    // выше места, где сорвалось, цель поднимаем не больше чем на 1 см: незачем командовать дистанцию, которой пока нет
+    if (Number.isFinite(zCm)) {
+      const cap = this.cfg.dir > 0 ? Math.max(zCm + 1, this.hEasy) : Math.min(zCm - 1, this.hEasy);
+      this.hHard = this.cfg.dir > 0 ? Math.min(this.hHard, cap) : Math.max(this.hHard, cap);
+    }
     this.early = this.holdMs < 10000 ? this.early + 1 : 0;
     this.holdMs = 0;
     this.recent = this.recent.filter((x) => t - x < 30000);
@@ -201,4 +225,15 @@ export class HoldController {
     if (!Number.isFinite(zCm)) return 0.5;
     return clamp(0.5 + (zCm - this.H) / (8 * this.tol), 0, 1);
   }
+}
+
+// ---- мишень упражнения: картинка заданного углового размера ----
+export type TargetSize = 'small' | 'medium' | 'large';
+/** Угловая высота картинки, °: на 25 см это около 9, 17 и 35 мм. */
+export const TARGET_DEG: Record<TargetSize, number> = { small: 2, medium: 4, large: 8 };
+export const TARGET_CODE: Record<TargetSize, number> = { small: 1, medium: 2, large: 3 };
+/** Динамичный режим: первая треть времени крупная картинка, вторая средняя, третья мелкая. */
+export function dynamicStage(elapsedSec: number, totalSec: number): TargetSize {
+  const k = Math.min(2, Math.max(0, Math.floor(elapsedSec / (totalSec / 3))));
+  return (['large', 'medium', 'small'] as const)[k];
 }

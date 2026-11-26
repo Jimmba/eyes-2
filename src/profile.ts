@@ -50,8 +50,7 @@ export interface HistRec {
   size?: string; // размер мишени в упражнении
 }
 export interface ExPrefs {
-  size: 'small' | 'medium' | 'large';
-  dyn: boolean; // постоянный угловой размер мишени (масштабируется с расстоянием)
+  size: 'small' | 'medium' | 'large' | 'dynamic'; // dynamic: по трети времени крупная, средняя, мелкая
 }
 export interface Stored {
   v: 1;

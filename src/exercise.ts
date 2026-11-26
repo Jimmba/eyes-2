@@ -5,11 +5,11 @@ import type { Env } from './calibration';
 import { WIN_DEFAULTS, WindowDetector } from './core/windowDetector';
 import { median } from './core/filters';
 import { letterHeightMm } from './core/scale';
-import { HOLD_DEFAULTS, HoldController, HoldStop } from './core/hold';
+import { HOLD_DEFAULTS, HoldController, HoldStop, TARGET_CODE, TARGET_DEG, TargetSize, dynamicStage } from './core/hold';
 import { t } from './i18n';
 import type { HistRec } from './profile';
 import { addHistory, app, lastHistory, persist, screenValid } from './state';
-import { Cancel, h, onTap, setBorder, sheet, wait } from './ui';
+import { Cancel, h, onHold, setBorder, sheet, wait } from './ui';
 import { fmtDate, makeScreen, p, sg } from './wizard';
 
 export interface HoldInit {
@@ -30,10 +30,13 @@ export interface HoldOutcome {
   breakCm: number;
   returnCm: number;
   stop: HoldStop;
+  size: 'small' | 'medium' | 'large' | 'dynamic';
+  stageBreaks: number[]; // срывы по третям времени (при динамичной: крупная, средняя, мелкая)
 }
 
-const ARCMIN: Record<'small' | 'medium' | 'large', number> = { small: 7.5, medium: 15, large: 30 }; // высота буквы: 7,5′ примерно 20/30
-const LETTERS = 'CDHKNORSVZ';
+/** Мишень: мордочка кота с мелкими деталями (усы, радужки) и яркими глазами, на них и смотреть. Вектор: размер задаётся в пикселях. */
+const PICTURE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><polygon points="14,40 18,8 42,24" fill="#f4a64a"/><polygon points="86,40 82,8 58,24" fill="#f4a64a"/><polygon points="20,34 22,16 35,25" fill="#f7c9a0"/><polygon points="80,34 78,16 65,25" fill="#f7c9a0"/><ellipse cx="50" cy="56" rx="38" ry="34" fill="#f4a64a"/><path d="M50 24L50 34M42 25L43 33M58 25L57 33" stroke="#b86a1c" stroke-width="2.4" stroke-linecap="round"/><ellipse cx="50" cy="68" rx="14" ry="10" fill="#fbe3c6"/><circle cx="34" cy="50" r="9" fill="#fff"/><circle cx="66" cy="50" r="9" fill="#fff"/><circle cx="34" cy="50" r="5.5" fill="#3aa86b"/><circle cx="66" cy="50" r="5.5" fill="#3aa86b"/><circle cx="34" cy="50" r="2.6" fill="#111"/><circle cx="66" cy="50" r="2.6" fill="#111"/><circle cx="35.6" cy="48.4" r="1.1" fill="#fff"/><circle cx="67.6" cy="48.4" r="1.1" fill="#fff"/><polygon points="46,62 54,62 50,67" fill="#e0707a"/><path d="M50 67L50 71M50 71Q44 76 39 72M50 71Q56 76 61 72" stroke="#7a3b2e" stroke-width="1.3" fill="none" stroke-linecap="round"/><g stroke="#fff" stroke-width="1" stroke-linecap="round"><path d="M36 66L10 60"/><path d="M36 69L9 70"/><path d="M36 72L11 80"/><path d="M64 66L90 60"/><path d="M64 69L91 70"/><path d="M64 72L89 80"/></g></svg>`;
+const SIZE_LABEL: Record<TargetSize, string> = { small: 'мелкая', medium: 'средняя', large: 'крупная' };
 
 /** Размер CSS-пикселя в мм: по калибровке экрана, иначе грубая оценка (телефон ~0,16 мм, монитор ~0,26 мм). */
 export function mmPerCssPx(): { mm: number; calibrated: boolean } {
@@ -72,27 +75,28 @@ function cmdText(key: string, dir: 1 | -1, H: number): string {
 async function intro(screen: ReturnType<typeof makeScreen>, init: HoldInit, dir: 1 | -1, canSkip: boolean): Promise<string> {
   const probe = new HoldController({ dir, breakCm: init.breakCm, returnCm: init.returnCm, ...HOLD_DEFAULTS });
   const sizes = h('div', { class: 'sizes' });
+  const names: Record<ExPrefsSize, string> = { small: t.hxSizeSmall, medium: t.hxSizeMed, large: t.hxSizeLarge, dynamic: t.hxSizeDyn };
   const paint = () => {
     sizes.replaceChildren(
-      ...(['small', 'medium', 'large'] as const).map((k) =>
-        h('button', { class: app.ex.size === k ? 'sel' : '', onclick: () => { app.ex.size = k; persist(); paint(); } }, k === 'small' ? t.hxSizeSmall : k === 'medium' ? t.hxSizeMed : t.hxSizeLarge),
+      ...(['small', 'medium', 'large', 'dynamic'] as const).map((k) =>
+        h('button', { class: app.ex.size === k ? 'sel' : '', onclick: () => { app.ex.size = k; persist(); paint(); } }, names[k]),
       ),
     );
   };
   paint();
-  const dyn = h('input', { type: 'checkbox', checked: app.ex.dyn, onchange: (e: Event) => { app.ex.dyn = (e.target as HTMLInputElement).checked; persist(); } });
   const cal = mmPerCssPx();
   const nodes: Node[] = [
     p(t.hxHow),
     p(`${t.hxBoundary}: ${t.trBreakShort} ${fmtCm(init.breakCm)}${Number.isFinite(init.returnCm) ? `, ${t.trReturnShort} ${fmtCm(init.returnCm)}` : ''}${init.source ? ` (${init.source})` : ''}. ${t.hxStartAt}: ${fmtCm(probe.H0)}.`, 'big'),
     p(t.hxTarget, 'why'),
     sizes,
-    h('p', null, h('label', null, dyn, t.hxDyn)),
+    p(t.hxSizeNote, 'why'),
   ];
   if (!cal.calibrated) nodes.push(p(t.hxSizeApprox, 'why'));
   nodes.push(p(t.hxTapNote, 'why'));
   return screen(t.hxName, nodes, [{ key: 'go', label: t.start2, primary: true }, ...(canSkip ? [{ key: 'skip', label: t.hxSkip }] : [])]);
 }
+type ExPrefsSize = 'small' | 'medium' | 'large' | 'dynamic';
 
 export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeof makeScreen>, init: HoldInit, canSkip: boolean): Promise<HoldOutcome | 'cancel' | 'skip'> {
   const dir: 1 | -1 = app.direction === 'away' ? 1 : -1;
@@ -102,11 +106,11 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
 
   const ctrl = new HoldController({ dir, breakCm: init.breakCm, returnCm: init.returnCm, ...HOLD_DEFAULTS });
   const det = new WindowDetector(WIN_DEFAULTS); // окно ~1 с против собственной базы (ноль для порога не нужен)
+  const pref = app.ex.size;
+  const third = HOLD_DEFAULTS.totalSec / 3;
 
   // ---- разметка экрана ----
   const target = h('div', { class: 'exTarget' });
-  const letter = h('span', null, 'K');
-  target.append(letter);
   const face = h('span', { class: 'exFace' });
   const cmd = h('div', { class: 'exCmd idle' }, '…');
   const sub = h('div', { class: 'exSub' }, '');
@@ -119,24 +123,28 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
   sheet.head(false);
   sheet.set('', h('div', { class: 'ex' }, face, target, cmd, sub, gauge, lbl, stat, hint, endBtn));
 
-  const size = (): { fontPx: number; boxPx: number } => {
+  // Размер: фиксированный на всё упражнение (мелкая, средняя, крупная) или по третям времени (динамичная). Физический размер
+  // считается один раз на стартовую дистанцию и не меняется, пока не сменится треть.
+  let curSize: TargetSize | null = null;
+  const sizeNow = (): TargetSize => (pref === 'dynamic' ? dynamicStage(ctrl.elapsedSec, HOLD_DEFAULTS.totalSec) : pref);
+  const applySize = (sz: TargetSize) => {
+    if (sz === curSize) return;
+    curSize = sz;
     const mm = mmPerCssPx().mm;
-    const distMm = app.ex.dyn && app.lastInfo && Number.isFinite(app.lastInfo.zs) ? app.lastInfo.zs : ctrl.H0 * 10;
-    const hPx = letterHeightMm(ARCMIN[app.ex.size], distMm) / mm; // высота прописной буквы
-    const fontPx = Math.min(Math.max(hPx / 0.72, 6), 260);
-    return { fontPx, boxPx: Math.max(44, fontPx * 1.5) };
+    const hPx = Math.min(Math.max(letterHeightMm(TARGET_DEG[sz] * 60, ctrl.H0 * 10) / mm, 14), 360);
+    target.innerHTML = PICTURE;
+    const svg = target.firstElementChild as SVGElement;
+    svg.setAttribute('width', hPx.toFixed(0));
+    svg.setAttribute('height', hPx.toFixed(0));
+    target.style.height = `${(hPx + 8).toFixed(0)}px`;
+    app.annot.size = TARGET_CODE[sz];
   };
-  const applySize = () => {
-    const s = size();
-    letter.style.fontSize = `${s.fontPx.toFixed(1)}px`;
-    target.style.height = `${s.boxPx.toFixed(0)}px`;
-  };
-  applySize();
+  applySize(sizeNow());
 
   // ---- кадры камеры: срыв и возврат ----
   let live = false; // касания и события камеры во время обратного отсчёта не считаются
+  let holdingUser = false; // пользователь держит касание: он видит срыв
   let lastValid = performance.now();
-  let lastLetter = performance.now();
   const stopSink = (() => {
     const cb = (i: import('./state').FrameInfo) => {
       const now = performance.now();
@@ -148,27 +156,30 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
       if (!e) return;
       if (e.type === 'break') {
         if (ctrl.onBreak(e.z / 10, now, 'camera')) app.pendingEvent = 'hold_break';
-      } else if (ctrl.onReturn(e.z / 10, now, 'camera')) app.pendingEvent = 'hold_return';
+      } else if (!holdingUser && ctrl.onReturn(e.z / 10, now, 'camera')) app.pendingEvent = 'hold_return'; // пока вы держите касание, камера возврат не объявляет
     };
     app.sinks.add(cb);
     return () => app.sinks.delete(cb);
   })();
 
-  // ---- касание экрана и пробел: срыв, если слито; возврат, если сорвано ----
+  // ---- касание экрана (или пробел) держится, пока есть срыв; отпустили: слилось. Пишется в user_hold ----
   const curCm = () => (app.lastInfo && Number.isFinite(app.lastInfo.zq) ? app.lastInfo.zq / 10 : NaN);
-  const stopTap = onTap(() => {
-    if (!live) return;
-    const now = performance.now();
-    if (ctrl.phase === 'recover') {
-      if (ctrl.onReturn(curCm(), now, 'tap')) {
-        det.forceFused(now);
-        app.pendingEvent = 'hold_return_tap';
-      }
-    } else if (ctrl.phase !== 'done' && ctrl.onBreak(curCm(), now, 'tap')) {
-      det.forceBroken(); // чтобы камера увидела возврат
-      app.pendingEvent = 'hold_break_tap';
-    }
-  });
+  const stopTap = onHold(
+    () => {
+      if (!live || holdingUser) return;
+      holdingUser = true;
+      app.annot.user = 1;
+      app.pendingEvent = 'hold_start';
+      if (ctrl.phase !== 'recover' && ctrl.phase !== 'done' && ctrl.onBreak(curCm(), performance.now(), 'tap')) det.forceBroken();
+    },
+    () => {
+      if (!holdingUser) return;
+      holdingUser = false;
+      app.annot.user = 0;
+      app.pendingEvent = 'hold_end';
+      if (ctrl.phase === 'recover' && ctrl.onReturn(curCm(), performance.now(), 'tap')) det.forceFused(performance.now());
+    },
+  );
 
   // ---- обратный отсчёт: цифры в команде ----
   try {
@@ -179,8 +190,8 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
       sub.textContent = `${t.hxTarget2}: ${ctrl.H.toFixed(0)} см`;
       if (await wait(1000, cancel)) return 'cancel';
     }
-    setBorder('red');
     live = true;
+    setBorder('green'); // идёт упражнение, срыва нет; красная при срыве, после конца исчезает
     ctrl.tick(performance.now(), curCm(), true);
 
     // ---- основной цикл: команды раз в ~150 мс ----
@@ -196,34 +207,31 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
       mark.style.left = `${(ctrl.gaugePos(z) * 100).toFixed(1)}%`;
       mark.className = `mark${c.style === 'go' ? ' in' : ''}`;
       face.className = `exFace${faceOk ? '' : ' bad'}`;
+      setBorder(ctrl.phase === 'recover' ? 'red' : 'green');
       app.annot.phase = ['enter', 'hold', 'recover', 'up', 'down', 'done'].indexOf(ctrl.phase);
       app.annot.target = ctrl.H;
-      stat.textContent = `${t.hxHoldStat} ${ctrl.holdSec.toFixed(0)}/${HOLD_DEFAULTS.successSec} с · ${t.hxBreaks} ${ctrl.breaks.length} · ${t.hxSteps} ${ctrl.ups} · ${mmss(HOLD_DEFAULTS.totalSec - ctrl.elapsedSec)}`;
-      if (now - lastLetter > 6000) {
-        lastLetter = now;
-        let ch = letter.textContent ?? 'K';
-        while (ch === letter.textContent) ch = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-        letter.textContent = ch;
-      }
-      if (app.ex.dyn) applySize();
-      if (await wait(150, cancel)) {
-        setBorder('off');
-        return 'cancel';
-      }
+      const sz = sizeNow();
+      applySize(sz);
+      stat.textContent = `${t.hxHoldStat} ${ctrl.holdSec.toFixed(0)}/${HOLD_DEFAULTS.successSec} с · ${t.hxBreaks} ${ctrl.breaks.length} · ${t.hxSteps} ${ctrl.ups} · ${mmss(HOLD_DEFAULTS.totalSec - ctrl.elapsedSec)}${pref === 'dynamic' ? ` · ${t.hxTargetNow}: ${SIZE_LABEL[sz]}` : ''}`;
+      if (await wait(150, cancel)) return 'cancel';
     }
-    setBorder('green');
   } finally {
     stopSink();
     stopTap();
+    setBorder('off');
     app.annot.det = 0;
+    app.annot.user = 0;
     app.annot.phase = 0;
     app.annot.target = 0;
+    app.annot.size = 0;
     env.recorder.scene = null;
     sheet.head(true);
   }
 
   const dur = Math.min(ctrl.elapsedSec, HOLD_DEFAULTS.totalSec);
   const med = (a: { cm: number }[]) => (a.length ? median(a.map((x) => x.cm)) : NaN);
+  const stageBreaks = [0, 0, 0]; // для динамичной: срывы на крупной, средней, мелкой
+  for (const b of ctrl.breaks) stageBreaks[Math.min(2, Math.floor(b.tSec / third))]++;
   return {
     breaks: ctrl.breaks.length,
     ups: ctrl.ups,
@@ -237,6 +245,8 @@ export async function runHold(env: Env, cancel: Cancel, screen: ReturnType<typeo
     breakCm: med(ctrl.breaks),
     returnCm: med(ctrl.returns),
     stop: ctrl.stop,
+    size: pref,
+    stageBreaks,
   };
 }
 
@@ -256,7 +266,7 @@ export function holdSummary(o: HoldOutcome): Node[] {
     holdSec: o.longestHoldSec,
     breaks: o.breaks,
     durSec: o.durSec,
-    size: app.ex.size + (app.ex.dyn ? '+dyn' : ''),
+    size: o.size,
   };
   if (o.durSec > 5) addHistory(rec);
   const nodes: Node[] = [];
@@ -264,6 +274,7 @@ export function holdSummary(o: HoldOutcome): Node[] {
   else nodes.push(h('p', { class: 'big' }, `${t.hxNoStep}: ${t.hxLongest} ${o.longestHoldSec.toFixed(0)} с, ${t.hxStartAt} ${fmtCm(o.H0)}`));
   const perMin = o.durSec > 0 ? (o.breaks / o.durSec) * 60 : 0;
   nodes.push(p(`${t.hxBreaks}: ${o.breaks} (${perMin.toFixed(1)} ${t.hxPerMin}); ${t.hxFused}: ${o.fusedSec.toFixed(0)} ${t.hxOf} ${o.durSec.toFixed(0)} с; ${t.hxSteps}: +${o.ups}${o.downs ? `, −${o.downs}` : ''}.`));
+  if (o.size === 'dynamic') nodes.push(p(`${t.hxByStage}: ${t.hxSizeLarge.toLowerCase()} ${o.stageBreaks[0]}, ${t.hxSizeMed.toLowerCase()} ${o.stageBreaks[1]}, ${t.hxSizeSmall.toLowerCase()} ${o.stageBreaks[2]}.`));
   if (o.stop === 'rule') nodes.push(p(t.hxRuleStop, 'warn'));
   if (prev && Number.isFinite(prev.holdCm ?? NaN) && Number.isFinite(o.bestHoldCm)) {
     const d = o.bestHoldCm - (prev.holdCm as number);

@@ -230,7 +230,7 @@ async function gridRun(c: Ctx, side: 'right' | 'left'): Promise<GridResult | 'ca
     frames.push({ mh: i.rawH[key], th: g.h, mv: i.rawV[key], tv: g.v, z: i.z });
   });
   env.recorder.scene = `grid_${side}`;
-  setBorder('red');
+  setBorder('green');
   const mh: number[] = [], th: number[] = [], mv: number[] = [], tv: number[] = [], zs: number[] = [], vars: number[] = [];
   let aborted = false;
   outer: for (const fy of GRID_FY)
@@ -269,7 +269,7 @@ async function gridRun(c: Ctx, side: 'right' | 'left'): Promise<GridResult | 'ca
     setBorder('off');
     return 'cancel';
   }
-  setBorder('green');
+  setBorder('off');
   const varH = vars.length ? vars.reduce((a, v) => a + v, 0) / vars.length : 0;
   return { h: fitGain(mh, th, varH), v: fullscreen && mh.length ? fitGain(mv, tv) : null, z: zs.length ? median(zs) : NaN, points: mh.length };
 }

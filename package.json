@@ -2,7 +2,7 @@
   "name": "strabismus-trainer",
   "version": "0.0.1",
   "private": true,
-  "description": "M3.5: ноль на дистанции слияния, база детектора 8-2,5 с, без поправки на реакцию",
+  "description": "M3.6: мишень-картинка, размеры и динамичный режим, замеры без повторных инструкций, рамка по состоянию",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

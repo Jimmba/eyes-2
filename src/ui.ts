@@ -16,13 +16,9 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<s
 }
 
 // ---- рамка по периметру экрана: красная идёт запись, зелёная закончено ----
-let greenTimer: ReturnType<typeof setTimeout> | null = null;
 export function setBorder(mode: 'off' | 'red' | 'green'): void {
   const el = $('frame');
-  if (greenTimer) clearTimeout(greenTimer);
-  greenTimer = null;
-  el.className = mode === 'off' ? '' : mode;
-  if (mode === 'green') greenTimer = setTimeout(() => (el.className = ''), 3000);
+  el.className = mode === 'off' ? '' : mode; // рамка есть, пока идёт запись: зелёная (срыва нет) или красная (срыв); после записи исчезает сразу
 }
 
 // ---- отмена: закрытие окна прерывает любой шаг ----
@@ -66,7 +62,7 @@ export async function timedCapture(o: { prep: number; duration: number; cancel: 
       if (await wait(1000, o.cancel)) return false;
     }
     timer.className = 'rec';
-    setBorder('red');
+    setBorder('green'); // идёт запись, срыва нет
     o.onStart?.();
     const end = performance.now() + o.duration * 1000;
     while (performance.now() < end) {
@@ -76,11 +72,12 @@ export async function timedCapture(o: { prep: number; duration: number; cancel: 
         return false;
       }
     }
-    setBorder('green');
+    setBorder('off');
     return true;
   } finally {
     o.onEnd?.();
     stopUi();
+    setBorder('off');
   }
 }
 
@@ -98,12 +95,12 @@ export async function captureUntil(o: { prep: number; maxSec: number; cancel: Ca
       if (await wait(1000, o.cancel)) return 'cancel';
     }
     timer.className = 'rec';
-    setBorder('red');
+    setBorder('green'); // дальше цвет ведёт вызывающий: красная при срыве
     o.onStart?.();
     const end = performance.now() + o.maxSec * 1000;
     while (performance.now() < end) {
       if (o.isDone()) {
-        setBorder('green');
+        setBorder('off');
         return 'done';
       }
       timer.textContent = `● ${Math.ceil((end - performance.now()) / 1000)} с`;
@@ -112,12 +109,13 @@ export async function captureUntil(o: { prep: number; maxSec: number; cancel: Ca
         return 'cancel';
       }
     }
-    setBorder('green');
+    setBorder('off');
     return 'timeout';
   } finally {
     o.onEnd?.();
     timer.hidden = true;
     timer.className = '';
+    setBorder('off');
   }
 }
 

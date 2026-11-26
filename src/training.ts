@@ -6,7 +6,7 @@ import { median } from './core/filters';
 import { t } from './i18n';
 import { FrameInfo, addHistory, app, lastHistory, persist, zeroValid } from './state';
 import type { HistRec } from './profile';
-import { Cancel, captureUntil, h, onHold, sheet } from './ui';
+import { Cancel, captureUntil, h, onHold, setBorder, sheet } from './ui';
 import { HoldInit, holdSummary, runHold } from './exercise';
 import { fmtDate, makeScreen, p, sg } from './wizard';
 import { ZERO_FRESH_H, runZeroStep, zeroAgeH } from './zero';
@@ -111,7 +111,9 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     app.annot.user = 0;
     app.pendingEvent = 'hold_end';
   };
+  let finished = false;
   const paint = () => {
+    if (recording && !finished) setBorder(pressed || det.state === 'broken' ? 'red' : 'green'); // есть срыв: красная, нет срыва: зелёная
     const z = curZ();
     live.textContent = Number.isFinite(z) ? `${t.dist}: ${cm(z).toFixed(0)} см` : t.noFaceShort;
     const first = segs[0];
@@ -167,6 +169,7 @@ async function runAttempt(env: Env, cancel: Cancel, scene: string, title: string
     onStart: () => (recording = true),
     onEnd: () => (env.recorder.scene = null),
   });
+  finished = true;
   clearInterval(timer);
   stop();
   closeSeg(); // вдруг попытку закончили, пока касание ещё держалось
@@ -221,15 +224,22 @@ const stats = (a: Attempt[]): Stats => ({
   total: a.length,
 });
 
-/** Серия попыток. Возвращает попытки или null при отмене. */
-async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeScreen>, prefix: string, name: string, n: number): Promise<Attempt[] | null> {
+/**
+ * Серия попыток. Инструкция показывается один раз, перед первой попыткой серии (intro = 'how'), либо вместо неё короткий
+ * экран отдыха (intro = 'rest', например перед замером «после» упражнения). После каждой попытки: результат, «Отдохните» и
+ * кнопка «Продолжить», которая сразу запускает следующую попытку (обратный отсчёт 3 с). Возвращает попытки или null при отмене.
+ */
+async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeScreen>, prefix: string, name: string, n: number, intro: 'how' | 'rest' = 'how'): Promise<Attempt[] | null> {
   const out: Attempt[] = [];
   const how = app.direction === 'away' ? t.trHowAway : t.trHowCloser;
+  const first = await screen(
+    `${name} · 1/${n}`,
+    intro === 'how' ? [p(how), p(t.trStopRule, 'why')] : [h('p', { class: 'big' }, t.trRest), p(t.trRestBefore, 'why')],
+    [{ key: 'go', label: intro === 'how' ? t.start2 : t.trContinue, primary: true }],
+  );
+  if (first === 'cancel') return null;
   for (let k = 1; k <= n; k++) {
     const ttl = `${name} · ${k}/${n}`;
-    const a = await screen(ttl, [p(how), p(t.trStopRule, 'why')], [{ key: 'go', label: t.start2, primary: true }, ...(k > 1 ? [{ key: 'end', label: t.trEnd }] : [])]);
-    if (a === 'cancel') return null;
-    if (a === 'end') break;
     const r = await runAttempt(env, cancel, `${prefix}_${k}`, ttl);
     if (r === 'cancel') return null;
     out.push(r);
@@ -243,10 +253,16 @@ async function series(env: Env, cancel: Cancel, screen: ReturnType<typeof makeSc
       if (r.holds > 0 && Number.isFinite(r.holdSec)) nodes.push(p(`${t.trHeld}: ${r.holdSec.toFixed(1)} с${r.holds > 1 ? `, нажатий ${r.holds}` : ''}.`, 'why'));
     } else nodes.push(h('p', { class: 'big' }, `${t.trNoBreak} ${r.maxCm.toFixed(0)} см`));
     const dists = out.map((x) => (x.broke ? x.breakCm : NaN));
-    if (worsened(dists, app.direction)) nodes.push(p(t.trDropped, 'warn'));
-    const c = await screen(ttl, nodes, worsened(dists, app.direction)
-      ? [{ key: 'end', label: t.trFinish, primary: true }, { key: 'next', label: t.trContinue }]
-      : [{ key: 'next', label: k < n ? t.next : t.trDone, primary: true }]);
+    const dropped = worsened(dists, app.direction);
+    if (dropped) nodes.push(p(t.trDropped, 'warn'));
+    const last = k === n;
+    if (!last) nodes.push(h('p', { class: 'big' }, t.trRest), p(t.trRestHint, 'why'));
+    const buttons = last
+      ? [{ key: 'next', label: t.trDone, primary: true }]
+      : dropped
+        ? [{ key: 'end', label: t.trFinish, primary: true }, { key: 'next', label: t.trContinue }]
+        : [{ key: 'next', label: t.trContinue, primary: true }, { key: 'end', label: t.trEnd }];
+    const c = await screen(`${ttl}`, nodes, buttons);
     if (c === 'cancel') return null;
     if (c === 'end') break;
   }
@@ -369,7 +385,7 @@ export async function runTraining(env: Env): Promise<void> {
       }
     }
   }
-  const after = await series(env, cancel, screen, 'after', t.trAfter, 3);
+  const after = await series(env, cancel, screen, 'after', t.trAfter, 3, 'rest');
   if (!after) return;
   const sa = save('after', after);
 
