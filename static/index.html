@@ -1,189 +1,720 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Косоглазие: M3.6</title>
-  <style>
-    :root { color-scheme: dark; --bg:#101418; --fg:#e8eaed; --muted:#9aa0a6; --acc:#4dd0e1; --panel:#171c21; --line:#2a333c; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
-    #frame { position:fixed; inset:0; pointer-events:none; z-index:2000; }
-    #frame.red { box-shadow: inset 0 0 0 4px #ff3b30; }
-    #frame.green { box-shadow: inset 0 0 0 4px #34c759; }
-    header.top { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:50; }
-    .brand { flex:1; min-width:0; }
-    .brand strong { display:block; font-size:1rem; }
-    #chips { display:block; color:var(--muted); font-size:.8rem; }
-    button { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:10px 14px; font-size:1rem; }
-    button.primary { background:var(--acc); color:#001a1d; border-color:var(--acc); font-weight:600; }
-    button:disabled { opacity:.5; }
-    #menuBtn { font-size:1.3rem; line-height:1; padding:8px 12px; }
-    nav#menu { position:fixed; top:52px; right:8px; width:min(92vw, 360px); max-height:80vh; overflow:auto; background:var(--panel); border:1px solid #394552; border-radius:10px; padding:8px; z-index:60; display:grid; gap:6px; }
-    nav#menu[hidden] { display:none; }
-    nav#menu > button { text-align:left; }
-    details { border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
-    details summary { cursor:pointer; color:var(--muted); }
-    details .dev { display:grid; gap:8px; margin-top:8px; }
-    label { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
-    input[type=number], input[type=text], select { background:#1f2933; color:var(--fg); border:1px solid #394552; border-radius:8px; padding:8px 10px; font-size:1rem; max-width:100%; }
-    main { max-width: 1000px; margin:0 auto; padding:8px 12px 24px; display:grid; gap:10px; }
-    .stage { position:relative; background:#000; border-radius:8px; overflow:hidden; text-align:center; }
-    #view { max-width:100%; max-height:58vh; width:auto; height:auto; display:block; margin:0 auto; transform: scaleX(-1); } /* зеркалим только превью */
-    #view.marking { transform:none; touch-action:none; cursor:crosshair; }
-    #video { display:none; }
-    #timer { position:fixed; top:8px; z-index:2100; left:50%; transform:translateX(-50%); font-size:2.6rem; font-weight:700; padding:2px 18px; border-radius:12px; background:rgba(0,0,0,.65); }
-    #timer[hidden] { display:none; }
-    #timer.prep { color:#ffd54f; }
-    #timer.rec { color:#ff6b61; font-size:1.8rem; }
-    #start { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
-    #start[hidden] { display:none; }
-    #status { color:var(--muted); font-size:.85rem; min-height:1.2em; }
-    .note { color: var(--muted); font-size: .85rem; }
-    pre { margin:0; padding:10px; background:var(--panel); border-radius:8px; font:13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-x:auto; }
-    #devPanel[hidden] { display:none; }
-    .crops { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
-    .crops figure { margin:0; }
-    .crops canvas { width:240px; height:120px; background:#000; border-radius:6px; display:block; }
-    .crops figcaption { font-size:.75rem; color:var(--muted); }
-    #stim { position:fixed; inset:0; background:#8c8c8c; z-index:1500; color:#222; }
-    #stim[hidden] { display:none; }
-    #stimMsg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); max-width:80%; text-align:center; font-size:1.1rem; }
-    #stimMsg.big { font-size:5rem; font-weight:700; }
-    #stimDot { position:absolute; width:30px; height:30px; margin:-15px 0 0 -15px; border-radius:50%; background:#d00; border:3px solid #fff; box-shadow:0 0 0 2px #000; }
-    #stimFrame { position:absolute; border:3px dashed #111; transform:translateX(-50%); }
-    #stimCtl { position:absolute; left:0; right:0; bottom:10px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; align-items:center; padding:0 8px; }
-    aside#sheet { position:fixed; left:0; right:0; bottom:0; max-height:44vh; overflow:auto; background:var(--panel); border-top:2px solid #394552; border-radius:14px 14px 0 0; z-index:40; padding:0 14px 14px; }
-    aside#sheet[hidden] { display:none; }
-    aside#sheet.full { top:0; max-height:none; height:100%; border-top:0; border-radius:0; background:var(--bg); padding-top:env(safe-area-inset-top, 0px); z-index:1800; }
-    aside#sheet.full .sheetHead { background:var(--bg); }
-    aside#sheet.nohead .sheetHead { display:none; }
-    .markpad { margin:10px 0; padding:22px 12px; min-height:26vh; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; gap:6px; border-radius:14px; border:2px dashed #394552; font-weight:700; font-size:1.25rem; user-select:none; }
-    .markpad small { font-weight:400; font-size:.9rem; color:var(--muted); }
-    .markpad.pressed { background:#4a2f00; border-color:#ff9800; color:#ffd180; }
-    .markpad.done { background:#12351f; border-color:#34c759; color:#9be7b0; }
-    .ex { display:flex; flex-direction:column; align-items:center; gap:10px; min-height:calc(100vh - 24px); padding-top:2px; user-select:none; }
-    .exTarget { width:100%; display:flex; justify-content:center; align-items:center; background:#000; color:#fff; font-family:Arial, Helvetica, sans-serif; font-weight:700; line-height:1; overflow:hidden; border-radius:6px; }
-    .exFace { position:absolute; top:8px; right:10px; width:12px; height:12px; border-radius:50%; background:#34c759; }
-    .exFace.bad { background:#ff3b30; }
-    .exCmd { font-size:2.1rem; font-weight:800; text-align:center; padding:12px 8px; width:100%; border-radius:12px; background:#1f2933; }
-    .exCmd.go { background:#12351f; color:#7be39a; }
-    .exCmd.warn { background:#4a3a00; color:#ffd54f; }
-    .exCmd.near { background:#0e3340; color:#6fd8f0; }
-    .exCmd.brk { background:#4a1f12; color:#ff9e80; }
-    .exCmd.idle { background:#1f2933; color:var(--muted); }
-    .exSub { font-size:1.1rem; text-align:center; }
-    .gauge { position:relative; width:100%; height:34px; background:#1f2933; border-radius:8px; overflow:hidden; }
-    .gauge .band { position:absolute; top:0; bottom:0; left:37.5%; width:25%; background:#17402a; }
-    .gauge .mark { position:absolute; top:3px; bottom:3px; width:6px; margin-left:-3px; border-radius:3px; background:#ffd54f; transition:left .15s linear; }
-    .gauge .mark.in { background:#34c759; }
-    .gaugeLbl { display:flex; justify-content:space-between; width:100%; font-size:.8rem; color:var(--muted); margin-top:-6px; }
-    .exStat { font-size:1rem; color:#cfd8dc; text-align:center; }
-    .exHint { font-size:.85rem; color:var(--muted); text-align:center; }
-    .sizes { display:flex; gap:8px; flex-wrap:wrap; }
-    .sizes button.sel { background:var(--acc); color:#001a1d; border-color:var(--acc); font-weight:600; } position:sticky; top:0; background:var(--panel); display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 0 6px; }
-    #sheetTitle { font-weight:700; }
-    #sheetSection { font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; color:var(--acc); }
-    #sheetSection:empty { display:none; }
-    aside#sheet.page { top:var(--sheetTop, 46vh); max-height:none; border-radius:0; border-top:2px solid #394552; background:var(--bg); z-index:40; }
-    body.calib #view { max-height:34vh; }
-    body.calib #view.marking { max-height:52vh; }
-    aside#sheet.holdmode, aside#sheet.holdmode * { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; touch-action:none; }
-    #sheetClose { padding:4px 10px; }
-    #sheetBody p { margin:.4em 0; }
-    #sheetBody p.why { color:#b9c4cf; font-size:.92rem; }
-    #sheetBody p.big { font-size:1.15rem; font-weight:600; }
-    #sheetBody p.warn { color:#ffb74d; }
-    #sheetBody p.status { padding:8px 10px; border-radius:8px; background:#1f2933; }
-    #sheetBody p.status.brk { background:#4a2f00; color:#ffd180; }
-    #sheetBody p.status.ok { background:#12351f; color:#9be7b0; }
-    button.markbtn { font-weight:700; padding:14px 18px; }
-    button.markbtn.pressed { background:#ff9800; color:#201000; border-color:#ff9800; }
-    button.markbtn.done { background:#34c759; color:#06210f; border-color:#34c759; }
-    #camModal { position:fixed; inset:0; background:var(--bg); z-index:3000; display:flex; align-items:center; justify-content:center; padding:16px; }
-    #camModal[hidden] { display:none; }
-    #camModal .box { background:var(--panel); border:1px solid #394552; border-radius:14px; padding:18px; max-width:420px; }
-    #camModal h2 { margin:0 0 8px; font-size:1.2rem; }
-    .btnrow { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-  </style>
-</head>
-<body>
-<div id="frame"></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Косоглазие: M3.6</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101418;
+        --fg: #e8eaed;
+        --muted: #9aa0a6;
+        --acc: #4dd0e1;
+        --panel: #171c21;
+        --line: #2a333c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+      }
+      #frame {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 2000;
+      }
+      #frame.red {
+        box-shadow: inset 0 0 0 4px #ff3b30;
+      }
+      #frame.green {
+        box-shadow: inset 0 0 0 4px #34c759;
+      }
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+        z-index: 50;
+      }
+      .brand {
+        flex: 1;
+        min-width: 0;
+      }
+      .brand strong {
+        display: block;
+        font-size: 1rem;
+      }
+      #chips {
+        display: block;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      button {
+        background: #1f2933;
+        color: var(--fg);
+        border: 1px solid #394552;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 1rem;
+      }
+      button.primary {
+        background: var(--acc);
+        color: #001a1d;
+        border-color: var(--acc);
+        font-weight: 600;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+      #menuBtn {
+        font-size: 1.3rem;
+        line-height: 1;
+        padding: 8px 12px;
+      }
+      nav#menu {
+        position: fixed;
+        top: 52px;
+        right: 8px;
+        width: min(92vw, 360px);
+        max-height: 80vh;
+        overflow: auto;
+        background: var(--panel);
+        border: 1px solid #394552;
+        border-radius: 10px;
+        padding: 8px;
+        z-index: 60;
+        display: grid;
+        gap: 6px;
+      }
+      nav#menu[hidden] {
+        display: none;
+      }
+      nav#menu > button {
+        text-align: left;
+      }
+      details {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+      }
+      details summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+      details .dev {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      label {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      input[type="number"],
+      input[type="text"],
+      select {
+        background: #1f2933;
+        color: var(--fg);
+        border: 1px solid #394552;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 1rem;
+        max-width: 100%;
+      }
+      main {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 8px 12px 24px;
+        display: grid;
+        gap: 10px;
+      }
+      .stage {
+        position: relative;
+        background: #000;
+        border-radius: 8px;
+        overflow: hidden;
+        text-align: center;
+      }
+      #view {
+        max-width: 100%;
+        max-height: 58vh;
+        width: auto;
+        height: auto;
+        display: block;
+        margin: 0 auto;
+        transform: scaleX(-1);
+      } /* зеркалим только превью */
+      #view.marking {
+        transform: none;
+        touch-action: none;
+        cursor: crosshair;
+      }
+      #video {
+        display: none;
+      }
+      #timer {
+        position: fixed;
+        top: 8px;
+        z-index: 2100;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 2.6rem;
+        font-weight: 700;
+        padding: 2px 18px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.65);
+      }
+      #timer[hidden] {
+        display: none;
+      }
+      #timer.prep {
+        color: #ffd54f;
+      }
+      #timer.rec {
+        color: #ff6b61;
+        font-size: 1.8rem;
+      }
+      #start {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+      }
+      #start[hidden] {
+        display: none;
+      }
+      #status {
+        color: var(--muted);
+        font-size: 0.85rem;
+        min-height: 1.2em;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      pre {
+        margin: 0;
+        padding: 10px;
+        background: var(--panel);
+        border-radius: 8px;
+        font:
+          13px/1.45 ui-monospace,
+          Menlo,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+      #devPanel[hidden] {
+        display: none;
+      }
+      .crops {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .crops figure {
+        margin: 0;
+      }
+      .crops canvas {
+        width: 240px;
+        height: 120px;
+        background: #000;
+        border-radius: 6px;
+        display: block;
+      }
+      .crops figcaption {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+      #stim {
+        position: fixed;
+        inset: 0;
+        background: #8c8c8c;
+        z-index: 1500;
+        color: #222;
+      }
+      #stim[hidden] {
+        display: none;
+      }
+      #stimMsg {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        max-width: 80%;
+        text-align: center;
+        font-size: 1.1rem;
+      }
+      #stimMsg.big {
+        font-size: 5rem;
+        font-weight: 700;
+      }
+      #stimDot {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        margin: -15px 0 0 -15px;
+        border-radius: 50%;
+        background: #d00;
+        border: 3px solid #fff;
+        box-shadow: 0 0 0 2px #000;
+      }
+      #stimFrame {
+        position: absolute;
+        border: 3px dashed #111;
+        transform: translateX(-50%);
+      }
+      #stimCtl {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        align-items: center;
+        padding: 0 8px;
+      }
+      aside#sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 44vh;
+        overflow: auto;
+        background: var(--panel);
+        border-top: 2px solid #394552;
+        border-radius: 14px 14px 0 0;
+        z-index: 40;
+        padding: 0 14px 14px;
+      }
+      aside#sheet[hidden] {
+        display: none;
+      }
+      aside#sheet.full {
+        top: 0;
+        max-height: none;
+        height: 100%;
+        border-top: 0;
+        border-radius: 0;
+        background: var(--bg);
+        padding-top: env(safe-area-inset-top, 0px);
+        z-index: 1800;
+      }
+      aside#sheet.full .sheetHead {
+        background: var(--bg);
+      }
+      aside#sheet.nohead .sheetHead {
+        display: none;
+      }
+      .markpad {
+        margin: 10px 0;
+        padding: 22px 12px;
+        min-height: 26vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        gap: 6px;
+        border-radius: 14px;
+        border: 2px dashed #394552;
+        font-weight: 700;
+        font-size: 1.25rem;
+        user-select: none;
+      }
+      .markpad small {
+        font-weight: 400;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .markpad.pressed {
+        background: #4a2f00;
+        border-color: #ff9800;
+        color: #ffd180;
+      }
+      .markpad.done {
+        background: #12351f;
+        border-color: #34c759;
+        color: #9be7b0;
+      }
+      .ex {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        min-height: calc(100vh - 24px);
+        padding-top: 2px;
+        user-select: none;
+      }
+      .exTarget {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: #000;
+        color: #fff;
+        font-family: Arial, Helvetica, sans-serif;
+        font-weight: 700;
+        line-height: 1;
+        overflow: hidden;
+        border-radius: 6px;
+      }
+      .exFace {
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #34c759;
+      }
+      .exFace.bad {
+        background: #ff3b30;
+      }
+      .exCmd {
+        font-size: 2.1rem;
+        font-weight: 800;
+        text-align: center;
+        padding: 12px 8px;
+        width: 100%;
+        border-radius: 12px;
+        background: #1f2933;
+      }
+      .exCmd.go {
+        background: #12351f;
+        color: #7be39a;
+      }
+      .exCmd.warn {
+        background: #4a3a00;
+        color: #ffd54f;
+      }
+      .exCmd.near {
+        background: #0e3340;
+        color: #6fd8f0;
+      }
+      .exCmd.brk {
+        background: #4a1f12;
+        color: #ff9e80;
+      }
+      .exCmd.idle {
+        background: #1f2933;
+        color: var(--muted);
+      }
+      .exSub {
+        font-size: 1.1rem;
+        text-align: center;
+      }
+      .gauge {
+        position: relative;
+        width: 100%;
+        height: 34px;
+        background: #1f2933;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .gauge .band {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 37.5%;
+        width: 25%;
+        background: #17402a;
+      }
+      .gauge .mark {
+        position: absolute;
+        top: 3px;
+        bottom: 3px;
+        width: 6px;
+        margin-left: -3px;
+        border-radius: 3px;
+        background: #ffd54f;
+        transition: left 0.15s linear;
+      }
+      .gauge .mark.in {
+        background: #34c759;
+      }
+      .gaugeLbl {
+        display: flex;
+        justify-content: space-between;
+        width: 100%;
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-top: -6px;
+      }
+      .exStat {
+        font-size: 1rem;
+        color: #cfd8dc;
+        text-align: center;
+      }
+      .exHint {
+        font-size: 0.85rem;
+        color: var(--muted);
+        text-align: center;
+      }
+      .sizes {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .sizes button.sel {
+        background: var(--acc);
+        color: #001a1d;
+        border-color: var(--acc);
+        font-weight: 600;
+      }
+      .sheetHead {
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 0 6px;
+      }
+      #sheetTitle {
+        font-weight: 700;
+      }
+      #sheetSection {
+        font-size: 0.78rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--acc);
+      }
+      #sheetSection:empty {
+        display: none;
+      }
+      aside#sheet.page {
+        top: var(--sheetTop, 46vh);
+        max-height: none;
+        border-radius: 0;
+        border-top: 2px solid #394552;
+        background: var(--bg);
+        z-index: 40;
+      }
+      body.calib #view {
+        max-height: 34vh;
+      }
+      body.calib #view.marking {
+        max-height: 52vh;
+      }
+      aside#sheet.holdmode,
+      aside#sheet.holdmode * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        touch-action: none;
+      }
+      #sheetClose {
+        padding: 4px 10px;
+      }
+      #sheetBody p {
+        margin: 0.4em 0;
+      }
+      #sheetBody p.why {
+        color: #b9c4cf;
+        font-size: 0.92rem;
+      }
+      #sheetBody p.big {
+        font-size: 1.15rem;
+        font-weight: 600;
+      }
+      #sheetBody p.warn {
+        color: #ffb74d;
+      }
+      #sheetBody p.status {
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #1f2933;
+      }
+      #sheetBody p.status.brk {
+        background: #4a2f00;
+        color: #ffd180;
+      }
+      #sheetBody p.status.ok {
+        background: #12351f;
+        color: #9be7b0;
+      }
+      button.markbtn {
+        font-weight: 700;
+        padding: 14px 18px;
+      }
+      button.markbtn.pressed {
+        background: #ff9800;
+        color: #201000;
+        border-color: #ff9800;
+      }
+      button.markbtn.done {
+        background: #34c759;
+        color: #06210f;
+        border-color: #34c759;
+      }
+      #camModal {
+        position: fixed;
+        inset: 0;
+        background: var(--bg);
+        z-index: 3000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+      #camModal[hidden] {
+        display: none;
+      }
+      #camModal .box {
+        background: var(--panel);
+        border: 1px solid #394552;
+        border-radius: 14px;
+        padding: 18px;
+        max-width: 420px;
+      }
+      #camModal h2 {
+        margin: 0 0 8px;
+        font-size: 1.2rem;
+      }
+      .btnrow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="frame"></div>
 
-<header class="top">
-  <div class="brand"><strong id="title"></strong><span id="chips"></span></div>
-  <button id="menuBtn" aria-label="Меню">☰</button>
-</header>
+    <header class="top">
+      <div class="brand">
+        <strong id="title"></strong><span id="chips"></span>
+      </div>
+      <button id="menuBtn" aria-label="Меню">☰</button>
+    </header>
 
-<nav id="menu" hidden>
-  <button id="miCalib"></button>
-  <button id="miMeasure"></button>
-  <button id="miTrain"></button>
-  <button id="miHold"></button>
-  <button id="miZero"></button>
-  <button id="miDist"></button>
-  <button id="miCsv"></button>
-  <button id="miReset"></button>
-  <details>
-    <summary id="devSummary"></summary>
-    <div class="dev">
-      <label><input type="checkbox" id="dev" checked><span id="devLabel"></span></label>
-      <label><span id="resLabel"></span>
-        <select id="res"><option value="1080">1920×1080</option><option value="720">1280×720</option></select></label>
-      <label><span id="dirLabel"></span>
-        <select id="dirSel"><option value="away"></option><option value="closer"></option></select></label>
-      <input type="text" id="label" autocomplete="off">
-      <label><span id="durLabel"></span> <input type="number" id="dur" value="10" min="3" max="60" style="width:4em"></label>
-      <button id="rec"></button>
-      <button id="snap"></button>
-      <span class="note" id="recInfo"></span>
+    <nav id="menu" hidden>
+      <button id="miCalib"></button>
+      <button id="miMeasure"></button>
+      <button id="miTrain"></button>
+      <button id="miHold"></button>
+      <button id="miZero"></button>
+      <button id="miDist"></button>
+      <button id="miCsv"></button>
+      <button id="miReset"></button>
+      <details>
+        <summary id="devSummary"></summary>
+        <div class="dev">
+          <label
+            ><input type="checkbox" id="dev" checked /><span
+              id="devLabel"
+            ></span
+          ></label>
+          <label
+            ><span id="resLabel"></span>
+            <select id="res">
+              <option value="1080">1920×1080</option>
+              <option value="720">1280×720</option>
+            </select></label
+          >
+          <label
+            ><span id="dirLabel"></span>
+            <select id="dirSel">
+              <option value="away"></option>
+              <option value="closer"></option></select
+          ></label>
+          <input type="text" id="label" autocomplete="off" />
+          <label
+            ><span id="durLabel"></span>
+            <input
+              type="number"
+              id="dur"
+              value="10"
+              min="3"
+              max="60"
+              style="width: 4em"
+          /></label>
+          <button id="rec"></button>
+          <button id="snap"></button>
+          <span class="note" id="recInfo"></span>
+        </div>
+      </details>
+    </nav>
+
+    <main>
+      <section>
+        <div class="stage" id="stage">
+          <video id="video" playsinline muted></video>
+          <canvas id="view"></canvas>
+          <div id="timer" hidden></div>
+          <button id="start" class="primary" hidden></button>
+        </div>
+        <div id="status"></div>
+      </section>
+
+      <section id="devPanel">
+        <pre id="panel"></pre>
+        <div class="crops">
+          <figure>
+            <canvas id="cropR" width="480" height="240"></canvas>
+            <figcaption id="capR"></figcaption>
+          </figure>
+          <figure>
+            <canvas id="cropL" width="480" height="240"></canvas>
+            <figcaption id="capL"></figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <p class="note" id="disclaimer"></p>
+    </main>
+
+    <div id="camModal" hidden>
+      <div class="box">
+        <h2 id="camTitle"></h2>
+        <p id="camText"></p>
+        <p id="camErr" class="note"></p>
+        <div class="btnrow">
+          <button id="camOk" class="primary"></button
+          ><button id="camLater"></button>
+        </div>
+      </div>
     </div>
-  </details>
-</nav>
 
-<main>
-  <section>
-    <div class="stage" id="stage">
-      <video id="video" playsinline muted></video>
-      <canvas id="view"></canvas>
-      <div id="timer" hidden></div>
-      <button id="start" class="primary" hidden></button>
+    <div id="stim" hidden>
+      <div id="stimMsg"></div>
+      <div id="stimDot" hidden></div>
+      <div id="stimFrame" hidden></div>
+      <div id="stimCtl" hidden></div>
     </div>
-    <div id="status"></div>
-  </section>
 
-  <section id="devPanel">
-    <pre id="panel"></pre>
-    <div class="crops">
-      <figure><canvas id="cropR" width="480" height="240"></canvas><figcaption id="capR"></figcaption></figure>
-      <figure><canvas id="cropL" width="480" height="240"></canvas><figcaption id="capL"></figcaption></figure>
-    </div>
-  </section>
+    <aside id="sheet" hidden>
+      <div class="sheetHead">
+        <div>
+          <div id="sheetSection"></div>
+          <span id="sheetTitle"></span>
+        </div>
+        <button id="sheetClose" aria-label="Закрыть">✕</button>
+      </div>
+      <div id="sheetBody"></div>
+    </aside>
 
-  <p class="note" id="disclaimer"></p>
-</main>
-
-<div id="camModal" hidden>
-  <div class="box">
-    <h2 id="camTitle"></h2>
-    <p id="camText"></p>
-    <p id="camErr" class="note"></p>
-    <div class="btnrow"><button id="camOk" class="primary"></button><button id="camLater"></button></div>
-  </div>
-</div>
-
-<div id="stim" hidden>
-  <div id="stimMsg"></div>
-  <div id="stimDot" hidden></div>
-  <div id="stimFrame" hidden></div>
-  <div id="stimCtl" hidden></div>
-</div>
-
-<aside id="sheet" hidden>
-  <div class="sheetHead"><div><div id="sheetSection"></div><span id="sheetTitle"></span></div><button id="sheetClose" aria-label="Закрыть">✕</button></div>
-  <div id="sheetBody"></div>
-</aside>
-
-<script type="module" src="./app.js"></script>
-</body>
+    <script type="module" src="./app.js"></script>
+  </body>
 </html>
